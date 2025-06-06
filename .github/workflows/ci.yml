@@ -177,6 +177,8 @@ jobs:
         run: |
           echo "📦 Creating Flutter build artifacts..."
           
+          # Create Android AAB
+          mkdir -p artifacts/Android
           # Create Android APK for testing
           flutter build apk --release --build-name="${{ steps.version.outputs.version }}" --build-number=99
           cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
