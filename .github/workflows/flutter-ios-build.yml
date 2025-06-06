@@ -51,7 +51,7 @@ on:
         required: false
 
 env:
-  FLUTTER_VERSION: '3.24.0'  # Latest stable Flutter version
+  FLUTTER_VERSION: '3.32.2'  # Latest stable Flutter version
   DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
 jobs:
