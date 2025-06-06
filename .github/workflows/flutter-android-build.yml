@@ -1,0 +1,392 @@
+# .github/workflows/flutter-android-build.yml - Flutter Android Build and Deploy
+name: "Flutter Android Build and Deploy"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      publish:
+        required: false
+        type: boolean
+        default: false
+      version:
+        required: true
+        type: string
+      version_code:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+      # Accept pre-built dependencies cache
+      cache_key:
+        description: 'Dependencies cache key from main pipeline'
+        required: false
+        type: string
+        default: ''
+      # Accept pre-built Flutter artifacts
+      build_artifacts:
+        description: 'Pre-built Flutter build artifacts name'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      GOOGLE_PLAY_JSON_KEY:
+        required: true
+      KEYSTORE_FILE:
+        required: true
+      KEYSTORE_PASSWORD:
+        required: true
+      KEY_ALIAS:
+        required: true
+      KEY_PASSWORD:
+        required: true
+
+env:
+  FLUTTER_VERSION: '3.24.0'  # Latest stable Flutter version
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # Flutter builds can take longer
+    
+    # Environment logic
+    environment: 
+      name: ${{ inputs.branch == 'master' && 'production' || inputs.branch }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 🎯 Setup Flutter Environment
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      # 🚀 Smart dependency handling - use cache if available
+      - name: Restore Dependencies Cache
+        id: restore-deps-cache
+        if: inputs.cache_key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            ~/.android/build-cache
+          key: ${{ inputs.cache_key }}
+
+      - name: Get Flutter Dependencies
+        if: inputs.cache_key == '' || steps.restore-deps-cache.outputs.cache-hit != 'true'
+        run: flutter pub get
+
+      # 🎯 Smart Flutter build artifacts handling
+      - name: Download Pre-built Flutter Artifacts
+        if: inputs.build_artifacts != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.build_artifacts }}
+          path: ./pre-built-artifacts/
+
+      - name: Setup Flutter Build Artifacts
+        run: |
+          if [ "${{ inputs.build_artifacts }}" != "" ] && [ -f "./pre-built-artifacts/app-release.aab" ]; then
+            # Use pre-built artifacts
+            echo "✅ Using pre-built Flutter artifacts"
+            mkdir -p build/app/outputs/bundle/release/
+            mkdir -p build/app/outputs/flutter-apk/
+            
+            cp ./pre-built-artifacts/app-release.aab build/app/outputs/bundle/release/ || echo "AAB not found"
+            cp ./pre-built-artifacts/app-release.apk build/app/outputs/flutter-apk/ || echo "APK not found"
+            
+            if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+              echo "📦 Using pre-built AAB: $(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')"
+            fi
+          else
+            echo "🔄 Will create fresh Flutter build..."
+          fi
+
+      # 🔄 Enhanced Ruby setup for Fastlane
+      - name: Setup Ruby for Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: android
+
+      # 🚀 Enhanced Gradle cache
+      - name: Cache Gradle Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            android/.gradle
+            android/app/build/intermediates
+          key: ${{ runner.os }}-flutter-gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/app/build.gradle', 'android/build.gradle', 'pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-gradle-
+
+      - name: Cache Restore Debug
+        run: |
+          echo "🔍 Cache Restore Debug:"
+          echo "- Input Cache Key: ${{ inputs.cache_key }}"
+          echo "- Cache Hit: ${{ steps.restore-deps-cache.outputs.cache-hit }}"
+          echo "- Cache Primary Key: ${{ steps.restore-deps-cache.outputs.cache-primary-key }}"
+          echo "- Cache Matched Key: ${{ steps.restore-deps-cache.outputs.cache-matched-key }}"
+          
+          # Check if pub cache exists
+          if [ -d "$PUB_CACHE" ]; then
+            echo "- Pub cache restored: $(du -sh $PUB_CACHE | cut -f1)"
+          else
+            echo "- Pub cache: Not restored"
+          fi
+
+      # 🔒 Enhanced keystore setup with validation
+      - name: Setup Android Keystore
+        run: |
+          echo "🔑 Setting up Android keystore..."
+          echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > android/app/keystore.jks
+          
+          # Verify keystore
+          if [ -f "android/app/keystore.jks" ]; then
+            keystore_size=$(ls -lh android/app/keystore.jks | awk '{print $5}')
+            echo "✅ Keystore ready: $keystore_size"
+          else
+            echo "❌ Keystore creation failed!"
+            exit 1
+          fi
+          
+          # Create key.properties
+          cat > android/key.properties << EOF
+          storeFile=keystore.jks
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          EOF
+          
+          echo "✅ Key properties configured"
+
+      # 🎯 Flutter version update in pubspec.yaml
+      - name: Update Flutter App Version
+        run: |
+          echo "📱 Updating Flutter app version..."
+          echo "Target version: ${{ inputs.version }} (code: ${{ inputs.version_code }})"
+          
+          # Backup original
+          cp pubspec.yaml pubspec.yaml.backup
+          
+          # Update pubspec.yaml with new version
+          # Format: version: 1.2.3+123
+          sed -i "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
+          
+          # Verify the changes
+          echo "✅ Updated pubspec.yaml:"
+          grep "^version:" pubspec.yaml
+          
+          # Validate version format
+          if ! echo "${{ inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "⚠️ Warning: Version format might be non-standard"
+          fi
+
+      # 🚀 Enhanced Flutter build with better error handling
+      - name: Build Flutter Android Debug
+        if: inputs.environment == 'debug'
+        run: |
+          echo "🔨 Building Flutter Android Debug..."
+          
+          # Check if pre-built artifacts exist
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "✅ Using pre-built debug APK"
+          else
+            # Pre-build checks
+            echo "📋 Pre-build validation:"
+            echo "- Flutter version: $(flutter --version | head -1)"
+            echo "- Dart version: $(dart --version)"
+            echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
+            
+            # Build with progress tracking
+            flutter build apk --debug \
+              --build-name="${{ inputs.version }}" \
+              --build-number="${{ inputs.version_code }}" \
+              --verbose | tee build.log
+            
+            # Post-build summary
+            if [ $? -eq 0 ]; then
+              echo "✅ Debug build completed successfully"
+              if [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
+                apk_size=$(ls -lh build/app/outputs/flutter-apk/app-debug.apk | awk '{print $5}')
+                echo "📦 Debug APK size: $apk_size"
+              fi
+            else
+              echo "❌ Debug build failed"
+              echo "📄 Last 20 lines of build log:"
+              tail -20 build.log
+              exit 1
+            fi
+          fi
+
+      - name: Build Flutter Android Release
+        if: inputs.environment == 'release'
+        run: |
+          echo "🔨 Building Flutter Android Release..."
+          
+          # Check if pre-built artifacts exist
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            echo "✅ Using pre-built release AAB"
+          else
+            # Enhanced build for release
+            flutter build appbundle --release \
+              --build-name="${{ inputs.version }}" \
+              --build-number="${{ inputs.version_code }}" \
+              --verbose | tee build.log
+            
+            # Post-build summary
+            if [ $? -eq 0 ]; then
+              echo "✅ Release build completed successfully"
+              if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+                aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
+                echo "📦 Release AAB size: $aab_size"
+                
+                # Additional release validations using aapt2 if available
+                echo "🔍 Release bundle validation:"
+                if command -v aapt2 >/dev/null 2>&1; then
+                  aapt2 dump badging build/app/outputs/bundle/release/app-release.aab | grep -E "(package|versionCode|versionName)" || echo "Could not extract bundle info"
+                else
+                  echo "aapt2 not available for validation"
+                fi
+              fi
+            else
+              echo "❌ Release build failed"
+              echo "📄 Last 20 lines of build log:"
+              tail -20 build.log
+              exit 1
+            fi
+          fi
+
+      # 🚀 Enhanced deployment with better error handling
+      - name: Deploy to Google Play Store
+        if: inputs.publish == true
+        env:
+          GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_REF_NAME: ${{ inputs.branch }}
+        run: |
+          cd android
+          echo "🚀 Deploying Flutter app to Google Play Store..."
+          
+          # Setup Play Store key
+          echo "$GOOGLE_PLAY_JSON_KEY" | base64 -d > google-play-key.json
+          
+          # Verify key file
+          if [ ! -f "google-play-key.json" ]; then
+            echo "❌ Google Play key setup failed"
+            exit 1
+          fi
+          
+          # Determine track based on branch
+          TRACK="internal"
+          case "${{ inputs.branch }}" in
+            "master") TRACK="production" ;;
+            "preprod") TRACK="alpha" ;;
+            *) TRACK="internal" ;;
+          esac
+          
+          echo "📤 Deploying to track: $TRACK"
+          
+          # Deploy with error handling using Fastlane
+          if bundle exec fastlane deploy_${{ inputs.branch }}; then
+            echo "✅ Deployment to $TRACK completed successfully"
+          else
+            echo "❌ Deployment failed"
+            echo "🔍 Checking fastlane logs..."
+            ls -la fastlane/logs/ 2>/dev/null || echo "No fastlane logs found"
+            exit 1
+          fi
+          
+          # Cleanup
+          rm -f google-play-key.json
+
+      # 🎯 Enhanced artifacts upload
+      - name: Upload Build Artifacts
+        if: inputs.publish == false
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-android-${{ inputs.environment }}-${{ inputs.version }}-${{ github.run_number }}
+          path: |
+            build/app/outputs/bundle/release/*.aab
+            build/app/outputs/flutter-apk/*.apk
+            build.log
+            android/fastlane/logs/*.log
+          retention-days: 7
+          compression-level: 6
+
+      # 🎯 Enhanced deployment summary
+      - name: Generate Build Summary
+        if: always()
+        run: |
+          echo "## 🤖 Flutter Android Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version Code:** ${{ inputs.version_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter Version:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Build status
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "- **Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Build Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # File sizes
+          if [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
+            debug_size=$(ls -lh build/app/outputs/flutter-apk/app-debug.apk | awk '{print $5}')
+            echo "- **Debug APK:** $debug_size" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            release_apk_size=$(ls -lh build/app/outputs/flutter-apk/app-release.apk | awk '{print $5}')
+            echo "- **Release APK:** $release_apk_size" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            release_aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
+            echo "- **Release AAB:** $release_aab_size" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Deployment info
+          if [ "${{ inputs.publish }}" = "true" ]; then
+            TRACK="internal"
+            case "${{ inputs.branch }}" in
+              "master") TRACK="production" ;;
+              "preprod") TRACK="alpha" ;;
+            esac
+            echo "- **Deployed to:** $TRACK track" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Artifacts:** Available for download" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Performance metrics
+          if [ -f "build.log" ]; then
+            build_time=$(grep "Built build/app/outputs" build.log | tail -1 | grep -o '[0-9]*,[0-9]*ms' || echo "Unknown")
+            if [ "$build_time" != "Unknown" ]; then
+              echo "- **Build Time:** $build_time" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Flutter Android build completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+
+      # 🧹 Cleanup
+      - name: Cleanup Sensitive Files
+        if: always()
+        run: |
+          rm -f android/app/keystore.jks
+          rm -f android/key.properties
+          rm -f android/google-play-key.json
+          echo "✅ Sensitive files cleaned up"

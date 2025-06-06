@@ -1,0 +1,8 @@
+# ios/fastlane/Matchfile - Flutter iOS Certificate Management
+git_url("git@github.com:IBCHUB/ios-certificates.git")
+storage_mode("git")
+app_identifier(["test.cicd.appibc"])  # Update this to your Flutter app's bundle identifier
+username("dev3@ibusiness.co.th")
+team_id("8MBHTZFZWC")  # Update this to your Apple Developer Team ID
+skip_confirmation(true)
+verbose(true)

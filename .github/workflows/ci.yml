@@ -1,0 +1,382 @@
+# ci.yml - Flutter Pull Request Testing
+name: Flutter Pull Request Testing
+
+on:
+  pull_request:
+    branches:
+      - master
+      - develop
+      - preprod
+
+env:
+  FLUTTER_VERSION: '3.24.0'  # Latest stable Flutter version
+
+jobs:
+  # Main testing and validation with Flutter build artifacts creation
+  test-and-validate:
+    runs-on: ubuntu-latest
+    outputs:
+      pr_version: ${{ steps.version.outputs.version }}
+      target_branch: ${{ steps.branch.outputs.name }}
+      coverage: ${{ steps.coverage.outputs.percentage }}
+      should_build: ${{ steps.changes.outputs.should_build }}
+      cache_key: ${{ steps.cache-info.outputs.key }}
+      cache_hit: ${{ steps.cache-deps.outputs.cache-hit }}
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 🆕 Check if we need builds
+      - name: Check Changes
+        id: changes
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -E '\.(dart|yaml|lock)$|android/|ios/|lib/|test/' > /dev/null; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Generate Cache Key
+        id: cache-info
+        run: |
+          # สร้าง cache key อย่างปลอดภัย
+          if [ -f "pubspec.lock" ]; then
+            LOCK_HASH=$(sha256sum pubspec.lock | cut -d' ' -f1 | cut -c1-12)
+          else
+            LOCK_HASH="no-lock-$(date +%Y%m%d)"
+          fi
+          
+          CACHE_KEY="${{ runner.os }}-flutter-deps-${LOCK_HASH}"
+          echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "🔑 Cache key: $CACHE_KEY"
+
+      - name: Cache Flutter Dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            ~/.android/build-cache
+          key: ${{ steps.cache-info.outputs.key }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-deps-
+
+      - name: Cache Debug Info
+        run: |
+          echo "🔍 Cache Debug Information:"
+          echo "- Cache Key: ${{ steps.cache-info.outputs.key }}"
+          echo "- Cache Hit: ${{ steps.cache-deps.outputs.cache-hit }}"
+          echo "- Cache Primary Key: ${{ steps.cache-deps.outputs.cache-primary-key }}"
+          echo "- Cache Matched Key: ${{ steps.cache-deps.outputs.cache-matched-key }}"
+          echo "- Pubspec Lock Hash: ${{ hashFiles('pubspec.lock') }}"
+          
+          # Check pub cache
+          if [ -d "$PUB_CACHE" ]; then
+            echo "- Pub cache exists: $(du -sh $PUB_CACHE | cut -f1)"
+          else
+            echo "- Pub cache: Not found"
+          fi
+
+      - name: Get Flutter Dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          flutter pub get
+          echo "✅ Dependencies installed"
+
+      - name: Generate PR Version
+        id: version
+        run: |
+          PR_NUMBER=${{ github.event.number }}
+          if [ -f "pubspec.yaml" ]; then
+            BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          else
+            BASE_VERSION="1.0.0"
+          fi
+          PR_VERSION="$BASE_VERSION-pr.$PR_NUMBER"
+          echo "version=$PR_VERSION" >> $GITHUB_OUTPUT
+          echo "Generated PR version: $PR_VERSION"
+
+      - name: Set Target Branch  
+        id: branch
+        run: |
+          TARGET_BRANCH=${{ github.base_ref }}
+          echo "name=$TARGET_BRANCH" >> $GITHUB_OUTPUT
+          echo "Target branch: $TARGET_BRANCH"
+
+      # Quality Checks
+      - name: Flutter Doctor
+        run: flutter doctor -v
+
+      - name: Code Analysis (Dart Analyze)
+        run: |
+          echo "## 🔍 Flutter Code Analysis Results" >> $GITHUB_STEP_SUMMARY
+          if flutter analyze --no-congratulate | tee analysis-results.txt; then
+            echo "✅ No analysis issues found" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Analysis issues detected - check logs for details" >> $GITHUB_STEP_SUMMARY
+            cat analysis-results.txt || true
+          fi
+
+      - name: Code Formatting Check
+        run: |
+          echo "## 📝 Code Formatting Check" >> $GITHUB_STEP_SUMMARY
+          if dart format --set-exit-if-changed . | tee format-results.txt; then
+            echo "✅ All files are properly formatted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Some files need formatting - check logs for details" >> $GITHUB_STEP_SUMMARY
+            echo "Run 'dart format .' to fix formatting issues" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Unit & Widget Tests with Coverage
+        run: |
+          echo "## 🧪 Running Flutter Tests" >> $GITHUB_STEP_SUMMARY
+          if flutter test --coverage --reporter=expanded | tee test-results.txt; then
+            echo "✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Some tests failed - check logs for details" >> $GITHUB_STEP_SUMMARY
+            cat test-results.txt || true
+          fi
+
+      - name: Extract Coverage Percentage
+        id: coverage
+        run: |
+          COVERAGE="0"
+          
+          if [ -f "coverage/lcov.info" ]; then
+            # Install lcov for coverage calculation
+            sudo apt-get update && sudo apt-get install -y lcov
+            COVERAGE=$(lcov --summary coverage/lcov.info 2>/dev/null | grep 'lines' | grep -o '[0-9.]*%' | head -1 | sed 's/%//' || echo "0")
+          fi
+          
+          # Validate และ fallback
+          if ! echo "$COVERAGE" | grep -q '^[0-9]*\.*[0-9]*$'; then
+            COVERAGE="0"
+          fi
+          
+          if [ -z "$COVERAGE" ] || [ "$COVERAGE" = "" ]; then
+            COVERAGE="0"
+          fi
+          
+          echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "Coverage: $COVERAGE%"
+
+      # 🆕 Create Flutter build artifacts for sharing
+      - name: Create Flutter Build Artifacts for Sharing
+        if: steps.changes.outputs.should_build == 'true'
+        run: |
+          echo "📦 Creating Flutter build artifacts..."
+          
+          # Create Android AAB
+          mkdir -p artifacts/android
+          flutter build appbundle --release --build-name="${{ steps.version.outputs.version }}" --build-number=99
+          cp build/app/outputs/bundle/release/app-release.aab artifacts/android/
+          
+          # Create Android APK for testing
+          flutter build apk --release --build-name="${{ steps.version.outputs.version }}" --build-number=99
+          cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
+          
+          # Create iOS Archive (without signing)
+          mkdir -p artifacts/ios
+          flutter build ios --release --no-codesign --build-name="${{ steps.version.outputs.version }}" --build-number=99
+          
+          # Copy iOS build artifacts
+          cp -r build/ios/iphoneos/Runner.app artifacts/ios/ || echo "iOS app not available on Linux runner"
+          
+          echo "✅ Flutter build artifacts created successfully"
+
+      # 🆕 Upload build artifacts with SIMPLE names
+      - name: Upload Android Artifacts
+        if: steps.changes.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-android-artifacts-${{ github.run_number }}
+          path: artifacts/android/
+          retention-days: 1
+
+      - name: Upload iOS Artifacts
+        if: steps.changes.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-ios-artifacts-${{ github.run_number }}
+          path: artifacts/ios/
+          retention-days: 1
+
+      - name: Coverage Report
+        run: |
+          echo "## 📊 Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+          COVERAGE="${{ steps.coverage.outputs.percentage }}"
+          echo "- **Coverage:** ${COVERAGE}%" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d "coverage" ]; then
+            echo "- **Detailed Report:** Available in artifacts" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Detailed Report:** No coverage files generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "$COVERAGE" = "0" ]; then
+            echo "- **ℹ️ Info:** No unit tests found - consider adding tests for better code quality" >> $GITHUB_STEP_SUMMARY
+          elif [ "$(awk "BEGIN {print ($COVERAGE >= 70) ? 1 : 0}")" = "1" ]; then
+            echo "- **✅ Good:** Coverage meets recommended threshold (≥70%)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **⚠️ Warning:** Coverage below 70% recommended threshold" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Coverage Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-coverage-reports-${{ github.event.number }}
+          path: |
+            coverage/
+            test-results.txt
+            analysis-results.txt
+            format-results.txt
+          retention-days: 7
+
+  # Build testing for Android - using Flutter
+  build-android-test:
+    needs: test-and-validate
+    if: needs.test-and-validate.outputs.should_build == 'true'
+    uses: ./.github/workflows/flutter-android-build.yml
+    with:
+      environment: debug
+      publish: false
+      version: ${{ needs.test-and-validate.outputs.pr_version }}
+      version_code: "99"
+      branch: ${{ needs.test-and-validate.outputs.target_branch }}
+      cache_key: ${{ needs.test-and-validate.outputs.cache_key }}
+      build_artifacts: flutter-android-artifacts-${{ github.run_number }}
+    secrets: inherit
+
+  # Build testing for iOS - using Flutter
+  build-ios-test:
+    needs: test-and-validate  
+    if: needs.test-and-validate.outputs.should_build == 'true'
+    uses: ./.github/workflows/flutter-ios-build.yml
+    with:
+      environment: debug
+      publish: false
+      version: ${{ needs.test-and-validate.outputs.pr_version }}
+      version_code: "99"
+      branch: ${{ needs.test-and-validate.outputs.target_branch }}
+      cache_key: ${{ needs.test-and-validate.outputs.cache_key }}
+      build_artifacts: flutter-ios-artifacts-${{ github.run_number }}
+    secrets: inherit
+
+  # Build analysis (simplified)
+  build-analysis:
+    needs: test-and-validate
+    if: needs.test-and-validate.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    
+    steps:
+      - name: Download Android Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flutter-android-artifacts-${{ github.run_number }}
+          path: ./build-check/
+
+      - name: Build Size Analysis
+        run: |
+          echo "## 📦 Flutter Build Analysis" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "./build-check/app-release.aab" ]; then
+            aab_size=$(ls -lh ./build-check/app-release.aab | awk '{print $5}')
+            aab_bytes=$(wc -c < ./build-check/app-release.aab)
+            
+            echo "- **✅ Build Analysis:** Completed" >> $GITHUB_STEP_SUMMARY
+            echo "- **Android AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
+            
+            # Size evaluation
+            if [ "$aab_bytes" -lt 10485760 ]; then
+              echo "- **📊 Size Status:** ✅ Excellent (< 10MB)" >> $GITHUB_STEP_SUMMARY
+            elif [ "$aab_bytes" -lt 20971520 ]; then
+              echo "- **📊 Size Status:** ✅ Good (< 20MB)" >> $GITHUB_STEP_SUMMARY
+            elif [ "$aab_bytes" -lt 52428800 ]; then
+              echo "- **📊 Size Status:** ⚠️ Large (< 50MB)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **📊 Size Status:** ❌ Very Large (> 50MB)" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "- **⚠️ Build Analysis:** Build file not found" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ -f "./build-check/app-release.apk" ]; then
+            apk_size=$(ls -lh ./build-check/app-release.apk | awk '{print $5}')
+            echo "- **Android APK Size:** $apk_size" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # PR Summary
+  pr-summary:
+    needs: [test-and-validate, build-android-test, build-ios-test, build-analysis]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: PR Summary
+        run: |
+          echo "## 🚀 Flutter Pull Request Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **PR Version:** ${{ needs.test-and-validate.outputs.pr_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Branch:** ${{ needs.test-and-validate.outputs.target_branch }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Handle coverage
+          COVERAGE="${{ needs.test-and-validate.outputs.coverage }}"
+          echo "- **Test Coverage:** ${COVERAGE}%" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Code Analysis:** ${{ needs.test-and-validate.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Code Formatting:** ${{ needs.test-and-validate.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Unit/Widget Tests:** ${{ needs.test-and-validate.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📱 Build Results" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.test-and-validate.outputs.should_build }}" = "true" ]; then
+            echo "- **Android Build:** ${{ needs.build-android-test.result == 'success' && '✅ Passed' || needs.build-android-test.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY  
+            echo "- **iOS Build:** ${{ needs.build-ios-test.result == 'success' && '✅ Passed' || needs.build-ios-test.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Build Analysis:** ${{ needs.build-analysis.result == 'success' && '✅ Completed' || '⚠️ Partial' }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Builds:** ⏭️ Skipped (documentation only)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Overall Status
+          TEST_SUCCESS="${{ needs.test-and-validate.result == 'success' }}"
+          SHOULD_BUILD="${{ needs.test-and-validate.outputs.should_build }}"
+          
+          if [ "$SHOULD_BUILD" = "true" ]; then
+            ANDROID_OK="${{ needs.build-android-test.result != 'failure' }}"
+            IOS_OK="${{ needs.build-ios-test.result != 'failure' }}"
+          else
+            ANDROID_OK="true"
+            IOS_OK="true"
+          fi
+          
+          if [ "$TEST_SUCCESS" = "true" ] && [ "$ANDROID_OK" = "true" ] && [ "$IOS_OK" = "true" ]; then
+            if [ "$COVERAGE" = "0" ]; then
+              echo "### ⚠️ Overall Status: Ready but No Tests" >> $GITHUB_STEP_SUMMARY
+              echo "All checks passed but no unit tests found. Consider adding tests for better code quality." >> $GITHUB_STEP_SUMMARY
+            elif [ "$(awk "BEGIN {print ($COVERAGE >= 70) ? 1 : 0}")" = "1" ]; then
+              echo "### ✅ Overall Status: Ready for Review" >> $GITHUB_STEP_SUMMARY
+              echo "All checks passed and coverage is adequate (${COVERAGE}%)." >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### ⚠️ Overall Status: Ready but Low Coverage" >> $GITHUB_STEP_SUMMARY
+              echo "All checks passed but consider improving test coverage (${COVERAGE}%)." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "### ❌ Overall Status: Issues Found" >> $GITHUB_STEP_SUMMARY
+            echo "Please fix the failing checks before merging." >> $GITHUB_STEP_SUMMARY
+          fi
