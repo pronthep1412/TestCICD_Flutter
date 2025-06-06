@@ -311,7 +311,7 @@ jobs:
       version: ${{ needs.setup-test-and-prepare.outputs.version }}
       version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
       branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
-      cache_key: ${{ runner.os }}-flutter-deps-${{ hashFiles('**/pubspec.lock') }}
+      cache_key: ${{ hashFiles('**/pubspec.lock') }}
       build_artifacts: cd-flutter-android-artifacts-${{ github.run_number }}
     secrets: inherit
 
@@ -325,7 +325,7 @@ jobs:
       version: ${{ needs.setup-test-and-prepare.outputs.version }}
       version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
       branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
-      cache_key: ${{ runner.os }}-flutter-deps-${{ hashFiles('**/pubspec.lock') }}
+      cache_key: ${{ hashFiles('**/pubspec.lock') }}
       build_artifacts: cd-flutter-ios-artifacts-${{ github.run_number }}
     secrets: inherit
 
