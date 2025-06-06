@@ -177,11 +177,6 @@ jobs:
         run: |
           echo "📦 Creating Flutter build artifacts..."
           
-          # Create Android AAB
-          mkdir -p artifacts/android
-          flutter build appbundle --release --build-name="${{ steps.version.outputs.version }}" --build-number=99
-          cp build/app/outputs/bundle/release/app-release.aab artifacts/android/
-          
           # Create Android APK for testing
           flutter build apk --release --build-name="${{ steps.version.outputs.version }}" --build-number=99
           cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
@@ -294,27 +289,6 @@ jobs:
       - name: Build Size Analysis
         run: |
           echo "## 📦 Flutter Build Analysis" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f "./build-check/app-release.aab" ]; then
-            aab_size=$(ls -lh ./build-check/app-release.aab | awk '{print $5}')
-            aab_bytes=$(wc -c < ./build-check/app-release.aab)
-            
-            echo "- **✅ Build Analysis:** Completed" >> $GITHUB_STEP_SUMMARY
-            echo "- **Android AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
-            
-            # Size evaluation
-            if [ "$aab_bytes" -lt 10485760 ]; then
-              echo "- **📊 Size Status:** ✅ Excellent (< 10MB)" >> $GITHUB_STEP_SUMMARY
-            elif [ "$aab_bytes" -lt 20971520 ]; then
-              echo "- **📊 Size Status:** ✅ Good (< 20MB)" >> $GITHUB_STEP_SUMMARY
-            elif [ "$aab_bytes" -lt 52428800 ]; then
-              echo "- **📊 Size Status:** ⚠️ Large (< 50MB)" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "- **📊 Size Status:** ❌ Very Large (> 50MB)" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "- **⚠️ Build Analysis:** Build file not found" >> $GITHUB_STEP_SUMMARY
-          fi
           
           if [ -f "./build-check/app-release.apk" ]; then
             apk_size=$(ls -lh ./build-check/app-release.apk | awk '{print $5}')
