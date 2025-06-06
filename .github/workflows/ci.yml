@@ -188,7 +188,7 @@ jobs:
           
           # Create iOS Archive (without signing)
           mkdir -p artifacts/ios
-          flutter build ios --release --no-codesign --build-name="${{ steps.version.outputs.version }}" --build-number=99
+          flutter build ios --no-codesign --build-name="${{ steps.version.outputs.version }}" --build-number=99
           
           # Copy iOS build artifacts
           cp -r build/ios/iphoneos/Runner.app artifacts/ios/ || echo "iOS app not available on Linux runner"
