@@ -176,12 +176,14 @@ jobs:
           flutter build apk --release --build-name="${{ steps.version.outputs.version }}" --build-number="${{ steps.version.outputs.version_code }}"
           cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
           
-          # iOS artifacts (without signing for now)
+          # iOS artifacts (skip on Linux)
           mkdir -p artifacts/ios
-          flutter build ios --release --no-codesign --build-name="${{ steps.version.outputs.version }}" --build-number="${{ steps.version.outputs.version_code }}"
-          
-          # Copy iOS build outputs
-          cp -r build/ios/iphoneos/Runner.app artifacts/ios/ || echo "iOS app not available on Linux runner"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            flutter build ios --release --no-codesign --build-name="${{ steps.version.outputs.version }}" --build-number="${{ steps.version.outputs.version_code }}"
+            cp -r build/ios/iphoneos/Runner.app artifacts/ios/
+          else
+            echo "iOS build skipped on Linux runner" > artifacts/ios/README.txt
+          fi
           
           echo "✅ Flutter build artifacts created successfully"
 
