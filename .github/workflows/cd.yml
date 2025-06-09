@@ -165,13 +165,20 @@ jobs:
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION (code: $VERSION_CODE)"
 
-      - name: Setup Android Keystore (Production Only)
-        if: github.ref_name == 'master' || github.ref_name == 'preprod'
+      
+      - name: Setup Android Keystore
         run: |
-          echo "🔑 Setting up Android keystore for production build..."
-          
-          # Create keystore
+          echo "🔑 Setting up Android keystore..."
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > android/app/keystore.jks
+          
+          # Verify keystore
+          if [ -f "android/app/keystore.jks" ]; then
+            keystore_size=$(ls -lh android/app/keystore.jks | awk '{print $5}')
+            echo "✅ Keystore ready: $keystore_size"
+          else
+            echo "❌ Keystore creation failed!"
+            exit 1
+          fi
           
           # Create key.properties
           cat > android/key.properties << EOF
@@ -181,107 +188,134 @@ jobs:
           keyPassword=${{ secrets.KEY_PASSWORD }}
           EOF
           
-          echo "✅ Keystore ready for production build"
+          echo "✅ Key properties configured"
           
       # 🆕 FIXED: Create Flutter build artifacts for sharing with enhanced verification
       - name: Create Flutter Build Artifacts for Sharing
         run: |
-          echo "📦 Creating Flutter build artifacts..."
+          echo "📦 Creating Flutter build artifacts for deployment..."
           
+          # Create directories
           mkdir -p artifacts/android
           mkdir -p artifacts/ios
           
-          # Update version
+          # Update pubspec.yaml version first
           sed -i "s/^version: .*/version: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}/" pubspec.yaml
+          echo "✅ Updated pubspec.yaml version to: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}"
           
-          # Build based on branch
-          if [ "${{ github.ref_name }}" = "master" ] || [ "${{ github.ref_name }}" = "preprod" ]; then
-            echo "🔨 Building RELEASE for production..."
-            
-            # Release builds (มี keystore แล้ว)
-            flutter build appbundle --release \
-              --build-name="${{ steps.version.outputs.version }}" \
-              --build-number="${{ steps.version.outputs.version_code }}"
-            
-            flutter build apk --release \
-              --build-name="${{ steps.version.outputs.version }}" \
-              --build-number="${{ steps.version.outputs.version_code }}"
-              
-            # Copy release artifacts
+          # Android artifacts - Build AAB first
+          echo "🔨 Building Android AAB..."
+          flutter build appbundle --release \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number="${{ steps.version.outputs.version_code }}" \
+            --verbose
+          
+          # Verify AAB exists and copy
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
             cp build/app/outputs/bundle/release/app-release.aab artifacts/android/
-            cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
-            
+            aab_size=$(ls -lh artifacts/android/app-release.aab | awk '{print $5}')
+            echo "✅ AAB created and copied: $aab_size"
           else
-            echo "🔨 Building DEBUG for development..."
-            
-            # Debug builds (ไม่ต้อง keystore)
-            flutter build appbundle --debug \
-              --build-name="${{ steps.version.outputs.version }}" \
-              --build-number="${{ steps.version.outputs.version_code }}"
-            
-            flutter build apk --debug \
-              --build-name="${{ steps.version.outputs.version }}" \
-              --build-number="${{ steps.version.outputs.version_code }}"
-              
-            # Copy debug artifacts
-            cp build/app/outputs/bundle/debug/app-debug.aab artifacts/android/
-            cp build/app/outputs/flutter-apk/app-debug.apk artifacts/android/
+            echo "❌ AAB build failed!"
+            exit 1
           fi
+          
+          # Build APK for testing
+          echo "🔨 Building Android APK..."
+          flutter build apk --release \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number="${{ steps.version.outputs.version_code }}"
+          
+          # Verify APK exists and copy
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
+            apk_size=$(ls -lh artifacts/android/app-release.apk | awk '{print $5}')
+            echo "✅ APK created and copied: $apk_size"
+          else
+            echo "⚠️ APK build failed, but continuing with AAB"
+          fi
+          
+          # iOS artifacts (skip on Linux but create placeholder)
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            echo "🔨 Building iOS..."
+            flutter build ios --release --no-codesign \
+              --build-name="${{ steps.version.outputs.version }}" \
+              --build-number="${{ steps.version.outputs.version_code }}"
+            cp -r build/ios/iphoneos/Runner.app artifacts/ios/
+          else
+            echo "iOS build skipped on Linux runner" > artifacts/ios/README.txt
+          fi
+          
+          # Final verification
+          echo "🔍 Final artifact verification:"
+          echo "Android artifacts:"
+          ls -la artifacts/android/
+          if [ -f "artifacts/android/app-release.aab" ]; then
+            echo "✅ AAB: $(ls -lh artifacts/android/app-release.aab | awk '{print $5}')"
+          fi
+          if [ -f "artifacts/android/app-release.apk" ]; then
+            echo "✅ APK: $(ls -lh artifacts/android/app-release.apk | awk '{print $5}')"
+          fi
+          
+          echo "iOS artifacts:"
+          ls -la artifacts/ios/
+          
+          echo "✅ Flutter build artifacts created successfully"
 
-            # 🆕 Upload artifacts for builds with enhanced verification
-            - name: Upload Android Artifacts
-              uses: actions/upload-artifact@v4
-              with:
-                name: cd-flutter-android-artifacts-${{ github.run_number }}
-                path: artifacts/android/
-                retention-days: 1
-                if-no-files-found: error
+      # 🆕 Upload artifacts for builds with enhanced verification
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cd-flutter-android-artifacts-${{ github.run_number }}
+          path: artifacts/android/
+          retention-days: 1
+          if-no-files-found: error
 
-            - name: Upload iOS Artifacts
-              uses: actions/upload-artifact@v4
-              with:
-                name: cd-flutter-ios-artifacts-${{ github.run_number }}
-                path: artifacts/ios/
-                retention-days: 1
-                if-no-files-found: warn
+      - name: Upload iOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cd-flutter-ios-artifacts-${{ github.run_number }}
+          path: artifacts/ios/
+          retention-days: 1
+          if-no-files-found: warn
 
-            # 🆕 Coverage and test reports
-            - name: Upload Coverage Reports
-              if: always()
-              uses: actions/upload-artifact@v4
-              with:
-                name: cd-flutter-coverage-reports-${{ github.run_number }}
-                path: |
-                  coverage/
-                  test/
-                retention-days: 7
-                if-no-files-found: warn
+      # 🆕 Coverage and test reports
+      - name: Upload Coverage Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cd-flutter-coverage-reports-${{ github.run_number }}
+          path: |
+            coverage/
+            test/
+          retention-days: 7
+          if-no-files-found: warn
 
-            # 🆕 Enhanced build summary with artifact info
-            - name: Setup Summary
-              run: |
-                echo "## 🚀 Flutter Continuous Deployment - Setup Phase" >> $GITHUB_STEP_SUMMARY
-                echo "- **Branch:** ${{ steps.branch.outputs.name }}" >> $GITHUB_STEP_SUMMARY
-                echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-                echo "- **Version Code:** ${{ steps.version.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
-                echo "- **Production:** ${{ steps.branch.outputs.is_production }}" >> $GITHUB_STEP_SUMMARY
-                echo "- **Coverage:** ${{ steps.coverage.outputs.percentage }}%" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "### ✅ Completed Tasks" >> $GITHUB_STEP_SUMMARY
-                echo "- Dependencies installed and cached" >> $GITHUB_STEP_SUMMARY
-                echo "- Code quality checks passed" >> $GITHUB_STEP_SUMMARY
-                echo "- Unit/Widget tests completed" >> $GITHUB_STEP_SUMMARY
-                echo "- Flutter build artifacts created and uploaded" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
-                echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
-                if [ -f "artifacts/android/app-release.aab" ]; then
-                  aab_size=$(ls -lh artifacts/android/app-release.aab | awk '{print $5}')
-                  echo "- **Android AAB:** $aab_size" >> $GITHUB_STEP_SUMMARY
-                fi
-                if [ -f "artifacts/android/app-release.apk" ]; then
-                  apk_size=$(ls -lh artifacts/android/app-release.apk | awk '{print $5}')
-                  echo "- **Android APK:** $apk_size" >> $GITHUB_STEP_SUMMARY
-                fi
+      # 🆕 Enhanced build summary with artifact info
+      - name: Setup Summary
+        run: |
+          echo "## 🚀 Flutter Continuous Deployment - Setup Phase" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ steps.branch.outputs.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version Code:** ${{ steps.version.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Production:** ${{ steps.branch.outputs.is_production }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Coverage:** ${{ steps.coverage.outputs.percentage }}%" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Completed Tasks" >> $GITHUB_STEP_SUMMARY
+          echo "- Dependencies installed and cached" >> $GITHUB_STEP_SUMMARY
+          echo "- Code quality checks passed" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit/Widget tests completed" >> $GITHUB_STEP_SUMMARY
+          echo "- Flutter build artifacts created and uploaded" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          if [ -f "artifacts/android/app-release.aab" ]; then
+            aab_size=$(ls -lh artifacts/android/app-release.aab | awk '{print $5}')
+            echo "- **Android AAB:** $aab_size" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f "artifacts/android/app-release.apk" ]; then
+            apk_size=$(ls -lh artifacts/android/app-release.apk | awk '{print $5}')
+            echo "- **Android APK:** $apk_size" >> $GITHUB_STEP_SUMMARY
+          fi
 
   # 🆕 Build analysis for Flutter
   build-analysis:
@@ -299,15 +333,16 @@ jobs:
 
       - name: Flutter Build Size Analysis
         run: |
-          echo "## 📦 Flutter Build Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Production Flutter Build Analysis" >> $GITHUB_STEP_SUMMARY
           
-          # ✅ ตรวจสอบทั้ง release และ debug
           if [ -f "./build-check/app-release.aab" ]; then
             aab_size=$(ls -lh ./build-check/app-release.aab | awk '{print $5}')
             aab_bytes=$(wc -c < ./build-check/app-release.aab)
-            echo "- **Android AAB (Release):** $aab_size" >> $GITHUB_STEP_SUMMARY
             
-            # Size evaluation for release
+            echo "- **✅ Build Analysis:** Completed" >> $GITHUB_STEP_SUMMARY
+            echo "- **Android AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
+            
+            # Size evaluation with production standards for Flutter
             if [ "$aab_bytes" -lt 10485760 ]; then
               echo "- **📊 Size Status:** ✅ Excellent (< 10MB)" >> $GITHUB_STEP_SUMMARY
             elif [ "$aab_bytes" -lt 20971520 ]; then
@@ -315,24 +350,15 @@ jobs:
             elif [ "$aab_bytes" -lt 52428800 ]; then
               echo "- **📊 Size Status:** ⚠️ Large (< 50MB)" >> $GITHUB_STEP_SUMMARY
             else
-              echo "- **📊 Size Status:** ❌ Too Large (> 50MB)" >> $GITHUB_STEP_SUMMARY
+              echo "- **📊 Size Status:** ❌ Too Large (> 50MB) - Consider optimization" >> $GITHUB_STEP_SUMMARY
             fi
-            
-          elif [ -f "./build-check/app-debug.aab" ]; then
-            aab_size=$(ls -lh ./build-check/app-debug.aab | awk '{print $5}')
-            echo "- **Android AAB (Debug):** $aab_size" >> $GITHUB_STEP_SUMMARY
-            echo "- **📊 Size Status:** ℹ️ Debug build (larger than release)" >> $GITHUB_STEP_SUMMARY
           else
             echo "- **⚠️ Build Analysis:** AAB file not found" >> $GITHUB_STEP_SUMMARY
           fi
           
-          # Check APK files
           if [ -f "./build-check/app-release.apk" ]; then
             apk_size=$(ls -lh ./build-check/app-release.apk | awk '{print $5}')
-            echo "- **Android APK (Release):** $apk_size" >> $GITHUB_STEP_SUMMARY
-          elif [ -f "./build-check/app-debug.apk" ]; then
-            apk_size=$(ls -lh ./build-check/app-debug.apk | awk '{print $5}')
-            echo "- **Android APK (Debug):** $apk_size" >> $GITHUB_STEP_SUMMARY
+            echo "- **Android APK Size:** $apk_size" >> $GITHUB_STEP_SUMMARY
           fi
 
   # Create release tag (for production)
