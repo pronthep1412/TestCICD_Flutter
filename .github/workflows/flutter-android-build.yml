@@ -171,7 +171,7 @@ jobs:
           
           # Create key.properties
           cat > android/key.properties << EOF
-          storeFile=keystore.jks
+          storeFile=app/keystore.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
