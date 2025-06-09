@@ -1,34 +1,88 @@
-# cd.yml - Flutter Continuous Deployment with FIXED Build Artifacts Sharing
+# .github/workflows/cd.yml - Simplified Flutter Continuous Deployment
 name: Flutter Continuous Deployment
 
 on:
   push:
-    branches:
-      - master
-      - develop
-      - preprod
+    branches: [main, develop, staging]
+    paths:
+      - 'lib/**'
+      - 'android/**'
+      - 'ios/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: '3.24.0'
 
 jobs:
-  # Common setup, testing, and build artifacts creation
-  setup-test-and-prepare:
+  # Quick setup and version generation
+  setup:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
       version_code: ${{ steps.version.outputs.version_code }}
-      branch: ${{ steps.branch.outputs.name }}
-      is_production: ${{ steps.branch.outputs.is_production }}
-      cache_key: ${{ steps.cache-info.outputs.key }}
-      cache_hit: ${{ steps.cache-deps.outputs.cache-hit }}
-      coverage: ${{ steps.coverage.outputs.percentage }}
+      branch: ${{ github.ref_name }}
+      is_production: ${{ steps.version.outputs.is_production }}
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate Version
+        id: version
+        run: |
+          BRANCH_NAME="${{ github.ref_name }}"
+          RUN_NUMBER="${{ github.run_number }}"
+          
+          # Get base version
+          BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          
+          # Generate version based on branch
+          case "$BRANCH_NAME" in
+            "main")
+              VERSION="$BASE_VERSION"
+              VERSION_CODE=$((2000000 + RUN_NUMBER))
+              IS_PRODUCTION="true"
+              ;;
+            "staging")
+              VERSION="$BASE_VERSION-beta.$RUN_NUMBER"
+              VERSION_CODE=$((1500000 + RUN_NUMBER))
+              IS_PRODUCTION="false"
+              ;;
+            *)
+              VERSION="$BASE_VERSION-alpha.$RUN_NUMBER"
+              VERSION_CODE=$((1000000 + RUN_NUMBER))
+              IS_PRODUCTION="false"
+              ;;
+          esac
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "is_production=$IS_PRODUCTION" >> $GITHUB_OUTPUT
+          
+          echo "📋 Generated Version: $VERSION (code: $VERSION_CODE)"
+          echo "🎯 Branch: $BRANCH_NAME (Production: $IS_PRODUCTION)"
+
+      - name: Setup Summary
+        run: |
+          echo "## 🚀 Flutter CD Pipeline Started" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Code:** ${{ steps.version.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Production:** ${{ steps.version.outputs.is_production }}" >> $GITHUB_STEP_SUMMARY
+
+  # Platform-independent Android deployment
+  deploy-android:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: 
+      name: ${{ needs.setup.outputs.branch == 'main' && 'production' || needs.setup.outputs.branch }}
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -36,9 +90,7 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
-      # 🚀 Enhanced dependency caching
-      - name: Cache Flutter Dependencies
-        id: cache-deps
+      - name: Cache Dependencies
         uses: actions/cache@v4
         with:
           path: |
@@ -50,463 +102,251 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-flutter-deps-
 
-      - name: Cache Debug Info
-        id: cache-info
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Setup Android Signing
         run: |
-          echo "🔍 Cache Debug Information:"
-          CACHE_KEY="${{ runner.os }}-flutter-deps-${{ hashFiles('pubspec.lock') }}"
-          echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
-          echo "- Cache Key: $CACHE_KEY"
-          echo "- Cache Hit: ${{ steps.cache-deps.outputs.cache-hit }}"
-          echo "- Cache Primary Key: ${{ steps.cache-deps.outputs.cache-primary-key }}"
-          echo "- Cache Matched Key: ${{ steps.cache-deps.outputs.cache-matched-key }}"
-          echo "- Pubspec Lock Hash: ${{ hashFiles('pubspec.lock') }}"
-          
-          # Check pub cache
-          if [ -d "$PUB_CACHE" ]; then
-            echo "- Pub cache exists: $(du -sh $PUB_CACHE | cut -f1)"
-          else
-            echo "- Pub cache: Not found"
-          fi
-
-      - name: Get Flutter Dependencies
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: |
-          flutter pub get
-          echo "✅ Dependencies installed"
-
-      # Quality Checks
-      - name: Flutter Doctor
-        run: flutter doctor -v
-
-      # - name: Code Analysis (Dart Analyze)
-      #   run: |
-      #     echo "## 🔍 Flutter Code Analysis Results" >> $GITHUB_STEP_SUMMARY
-      #     if flutter analyze --no-congratulate; then
-      #       echo "✅ No analysis issues found" >> $GITHUB_STEP_SUMMARY
-      #     else
-      #       echo "⚠️ Analysis issues detected - check logs for details" >> $GITHUB_STEP_SUMMARY
-      #       flutter analyze --no-congratulate || true
-      #     fi
-
-      # - name: Code Formatting Check
-      #   run: |
-      #     echo "## 📝 Code Formatting Check" >> $GITHUB_STEP_SUMMARY
-      #     if dart format --set-exit-if-changed .; then
-      #       echo "✅ All files are properly formatted" >> $GITHUB_STEP_SUMMARY
-      #     else
-      #       echo "⚠️ Some files need formatting" >> $GITHUB_STEP_SUMMARY
-      #     fi
-
-      # - name: Unit & Widget Tests with Coverage
-      #   run: flutter test --coverage --reporter=expanded
-
-      # - name: Extract Coverage Percentage
-      #   id: coverage
-      #   run: |
-      #     COVERAGE="0"
-          
-      #     if [ -f "coverage/lcov.info" ]; then
-      #       # Install lcov for coverage calculation
-      #       sudo apt-get update && sudo apt-get install -y lcov
-      #       COVERAGE=$(lcov --summary coverage/lcov.info 2>/dev/null | grep 'lines' | grep -o '[0-9.]*%' | head -1 | sed 's/%//' || echo "0")
-      #     fi
-          
-      #     # Validate และ fallback
-      #     if ! echo "$COVERAGE" | grep -q '^[0-9]*\.*[0-9]*$'; then
-      #       COVERAGE="0"
-      #     fi
-          
-      #     if [ -z "$COVERAGE" ] || [ "$COVERAGE" = "" ]; then
-      #       COVERAGE="0"
-      #     fi
-          
-      #     echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
-      #     echo "Coverage: $COVERAGE%"
-
-      - name: Set Branch Info
-        id: branch
-        run: |
-          BRANCH_NAME=${{ github.ref_name }}
-          echo "name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          echo "is_production=$([[ '$BRANCH_NAME' == 'master' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
-          echo "Branch: $BRANCH_NAME (Production: $([[ '$BRANCH_NAME' == 'master' ]] && echo 'Yes' || echo 'No'))"
-
-      - name: Generate Version and Version Code
-        id: version
-        run: |
-          BRANCH_NAME=${{ github.ref_name }}
-          RUN_NUMBER=${{ github.run_number }}
-          
-          # Get base version from pubspec.yaml
-          if [ -f "pubspec.yaml" ]; then
-            PACKAGE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
-          else
-            PACKAGE_VERSION="1.0.0"
-          fi
-          
-          # Generate version name
-          if [ "$BRANCH_NAME" = "master" ]; then
-            VERSION="$PACKAGE_VERSION"
-            BASE_CODE=2000000
-          elif [ "$BRANCH_NAME" = "preprod" ]; then
-            VERSION="$PACKAGE_VERSION-beta.$RUN_NUMBER"
-            BASE_CODE=1500000
-          else
-            VERSION="$PACKAGE_VERSION-alpha.$RUN_NUMBER"
-            BASE_CODE=1000000
-          fi
-          
-          # Generate unique version code
-          VERSION_CODE=$((BASE_CODE + RUN_NUMBER))
-          
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
-          echo "Generated version: $VERSION (code: $VERSION_CODE)"
-
-      
-      - name: Setup Android Keystore
-        run: |
-          echo "🔑 Setting up Android keystore..."
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > android/app/keystore.jks
-          
-          # Verify keystore
-          if [ -f "android/app/keystore.jks" ]; then
-            keystore_size=$(ls -lh android/app/keystore.jks | awk '{print $5}')
-            echo "✅ Keystore ready: $keystore_size"
-          else
-            echo "❌ Keystore creation failed!"
-            exit 1
-          fi
-          
-          # Create key.properties
           cat > android/key.properties << EOF
           storeFile=keystore.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
           EOF
-          
-          echo "✅ Key properties configured"
-          
-      # 🆕 FIXED: Create Flutter build artifacts for sharing with enhanced verification
-      - name: Create Flutter Build Artifacts for Sharing
+
+      - name: Update Version
         run: |
-          echo "📦 Creating Flutter build artifacts for deployment..."
-          
-          # Create directories
-          mkdir -p artifacts/android
-          mkdir -p artifacts/ios
-          
-          # Update pubspec.yaml version first
-          sed -i "s/^version: .*/version: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}/" pubspec.yaml
-          echo "✅ Updated pubspec.yaml version to: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}"
-          
-          # Android artifacts - Build AAB first
+          sed -i "s/^version: .*/version: ${{ needs.setup.outputs.version }}+${{ needs.setup.outputs.version_code }}/" pubspec.yaml
+
+      - name: Build Android AAB
+        run: |
           echo "🔨 Building Android AAB..."
           flutter build appbundle --release \
-            --build-name="${{ steps.version.outputs.version }}" \
-            --build-number="${{ steps.version.outputs.version_code }}"
-          
-          # Verify AAB exists and copy
-          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-            cp build/app/outputs/bundle/release/app-release.aab artifacts/android/
-            aab_size=$(ls -lh artifacts/android/app-release.aab | awk '{print $5}')
-            echo "✅ AAB created and copied: $aab_size"
-          else
-            echo "❌ AAB build failed!"
-            exit 1
-          fi
-          
-          # Build APK for testing
-          echo "🔨 Building Android APK..."
-          flutter build apk --release \
-            --build-name="${{ steps.version.outputs.version }}" \
-            --build-number="${{ steps.version.outputs.version_code }}"
-          
-          # Verify APK exists and copy
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
-            apk_size=$(ls -lh artifacts/android/app-release.apk | awk '{print $5}')
-            echo "✅ APK created and copied: $apk_size"
-          else
-            echo "⚠️ APK build failed, but continuing with AAB"
-          fi
-          
-          # iOS artifacts (skip on Linux but create placeholder)
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            echo "🔨 Building iOS..."
-            flutter build ios --release --no-codesign \
-              --build-name="${{ steps.version.outputs.version }}" \
-              --build-number="${{ steps.version.outputs.version_code }}"
-            cp -r build/ios/iphoneos/Runner.app artifacts/ios/
-          else
-            echo "iOS build skipped on Linux runner" > artifacts/ios/README.txt
-          fi
-          
-          # Final verification
-          echo "🔍 Final artifact verification:"
-          echo "Android artifacts:"
-          ls -la artifacts/android/
-          if [ -f "artifacts/android/app-release.aab" ]; then
-            echo "✅ AAB: $(ls -lh artifacts/android/app-release.aab | awk '{print $5}')"
-          fi
-          if [ -f "artifacts/android/app-release.apk" ]; then
-            echo "✅ APK: $(ls -lh artifacts/android/app-release.apk | awk '{print $5}')"
-          fi
-          
-          echo "iOS artifacts:"
-          ls -la artifacts/ios/
-          
-          echo "✅ Flutter build artifacts created successfully"
+            --build-name="${{ needs.setup.outputs.version }}" \
+            --build-number="${{ needs.setup.outputs.version_code }}"
 
-      # 🆕 Upload artifacts for builds with enhanced verification
-      - name: Upload Android Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cd-flutter-android-artifacts-${{ github.run_number }}
-          path: artifacts/android/
-          retention-days: 1
-          if-no-files-found: error
+      - name: Deploy to Google Play
+        env:
+          GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
+        run: |
+          # Setup Play Store credentials
+          echo "$GOOGLE_PLAY_JSON_KEY" | base64 -d > android/google-play-key.json
+          
+          # Determine track
+          TRACK="internal"
+          case "${{ needs.setup.outputs.branch }}" in
+            "main") TRACK="production" ;;
+            "staging") TRACK="beta" ;;
+          esac
+          
+          echo "📤 Deploying to $TRACK track..."
+          
+          # Use Fastlane or direct upload
+          cd android
+          bundle exec fastlane android deploy \
+            track:$TRACK \
+            aab:"../build/app/outputs/bundle/release/app-release.aab" \
+            json_key:"google-play-key.json"
 
-      - name: Upload iOS Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: cd-flutter-ios-artifacts-${{ github.run_number }}
-          path: artifacts/ios/
-          retention-days: 1
-          if-no-files-found: warn
+      - name: Android Summary
+        run: |
+          aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
+          
+          echo "## 🤖 Android Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
+          echo "- **Track:** ${{ needs.setup.outputs.branch == 'main' && 'Production' || needs.setup.outputs.branch == 'staging' && 'Beta' || 'Internal' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ✅ Deployed" >> $GITHUB_STEP_SUMMARY
 
-      # 🆕 Coverage and test reports
-      - name: Upload Coverage Reports
+      - name: Cleanup
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cd-flutter-coverage-reports-${{ github.run_number }}
-          path: |
-            coverage/
-            test/
-          retention-days: 7
-          if-no-files-found: warn
-
-      # 🆕 Enhanced build summary with artifact info
-      - name: Setup Summary
         run: |
-          echo "## 🚀 Flutter Continuous Deployment - Setup Phase" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** ${{ steps.branch.outputs.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version Code:** ${{ steps.version.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Production:** ${{ steps.branch.outputs.is_production }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Coverage:** ${{ steps.coverage.outputs.percentage }}%" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### ✅ Completed Tasks" >> $GITHUB_STEP_SUMMARY
-          echo "- Dependencies installed and cached" >> $GITHUB_STEP_SUMMARY
-          echo "- Code quality checks passed" >> $GITHUB_STEP_SUMMARY
-          echo "- Unit/Widget tests completed" >> $GITHUB_STEP_SUMMARY
-          echo "- Flutter build artifacts created and uploaded" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
-          if [ -f "artifacts/android/app-release.aab" ]; then
-            aab_size=$(ls -lh artifacts/android/app-release.aab | awk '{print $5}')
-            echo "- **Android AAB:** $aab_size" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f "artifacts/android/app-release.apk" ]; then
-            apk_size=$(ls -lh artifacts/android/app-release.apk | awk '{print $5}')
-            echo "- **Android APK:** $apk_size" >> $GITHUB_STEP_SUMMARY
-          fi
+          rm -f android/app/keystore.jks
+          rm -f android/key.properties
+          rm -f android/google-play-key.json
 
-  # 🆕 Build analysis for Flutter
-  build-analysis:
-    needs: setup-test-and-prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    continue-on-error: true
-    
-    steps:
-      - name: Download Android Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: cd-flutter-android-artifacts-${{ github.run_number }}
-          path: ./build-check/
-
-      - name: Flutter Build Size Analysis
-        run: |
-          echo "## 📦 Production Flutter Build Analysis" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f "./build-check/app-release.aab" ]; then
-            aab_size=$(ls -lh ./build-check/app-release.aab | awk '{print $5}')
-            aab_bytes=$(wc -c < ./build-check/app-release.aab)
-            
-            echo "- **✅ Build Analysis:** Completed" >> $GITHUB_STEP_SUMMARY
-            echo "- **Android AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
-            
-            # Size evaluation with production standards for Flutter
-            if [ "$aab_bytes" -lt 10485760 ]; then
-              echo "- **📊 Size Status:** ✅ Excellent (< 10MB)" >> $GITHUB_STEP_SUMMARY
-            elif [ "$aab_bytes" -lt 20971520 ]; then
-              echo "- **📊 Size Status:** ✅ Good (< 20MB)" >> $GITHUB_STEP_SUMMARY
-            elif [ "$aab_bytes" -lt 52428800 ]; then
-              echo "- **📊 Size Status:** ⚠️ Large (< 50MB)" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "- **📊 Size Status:** ❌ Too Large (> 50MB) - Consider optimization" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "- **⚠️ Build Analysis:** AAB file not found" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ -f "./build-check/app-release.apk" ]; then
-            apk_size=$(ls -lh ./build-check/app-release.apk | awk '{print $5}')
-            echo "- **Android APK Size:** $apk_size" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  # Create release tag (for production)
-  create-release-tag:
-    needs: [setup-test-and-prepare, build-analysis]
-    if: needs.setup-test-and-prepare.outputs.is_production == 'true'
-    runs-on: ubuntu-latest
+  # Platform-independent iOS deployment
+  deploy-ios:
+    needs: setup
+    runs-on: macos-latest
+    timeout-minutes: 35
+    environment: 
+      name: ${{ needs.setup.outputs.branch == 'main' && 'production' || needs.setup.outputs.branch }}
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Create and Push Release Tag
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods
+          key: ${{ runner.os }}-flutter-ios-${{ hashFiles('pubspec.lock', 'ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-ios-
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Install iOS Dependencies
+        run: cd ios && pod install
+
+      - name: Setup Ruby for Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: ios
+
+      - name: Update Version
+        run: |
+          sed -i '' "s/^version: .*/version: ${{ needs.setup.outputs.version }}+${{ needs.setup.outputs.version_code }}/" pubspec.yaml
+
+      - name: Setup App Store Connect API
+        run: |
+          mkdir -p /tmp/ios-keys
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /tmp/ios-keys/AuthKey.p8
+
+      - name: Build and Deploy iOS
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_PATH: /tmp/ios-keys/AuthKey.p8
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+        run: |
+          cd ios
+          
+          # Determine deployment target
+          TARGET="testflight_internal"
+          case "${{ needs.setup.outputs.branch }}" in
+            "main") TARGET="app_store" ;;
+            "staging") TARGET="testflight_beta" ;;
+          esac
+          
+          echo "🚀 Building and deploying to $TARGET..."
+          
+          # Build and deploy with Fastlane
+          bundle exec fastlane ios deploy \
+            target:$TARGET \
+            version:"${{ needs.setup.outputs.version }}" \
+            build_number:"${{ needs.setup.outputs.version_code }}"
+
+      - name: iOS Summary
+        run: |
+          echo "## 🍎 iOS Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** ${{ needs.setup.outputs.branch == 'main' && 'App Store' || needs.setup.outputs.branch == 'staging' && 'TestFlight Beta' || 'TestFlight Internal' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ✅ Deployed" >> $GITHUB_STEP_SUMMARY
+          
+          # Show build artifacts if available
+          if [ -d "build" ]; then
+            for ipa in build/*.ipa; do
+              if [ -f "$ipa" ]; then
+                ipa_size=$(ls -lh "$ipa" | awk '{print $5}')
+                echo "- **IPA Size:** $ipa_size" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf /tmp/ios-keys
+
+  # Create GitHub release for production
+  create-release:
+    needs: [setup, deploy-android, deploy-ios]
+    if: needs.setup.outputs.is_production == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Git Tag
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          TAG_NAME="v${{ needs.setup-test-and-prepare.outputs.version }}"
+          TAG_NAME="v${{ needs.setup.outputs.version }}"
           
-          # Check if tag already exists
-          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "⚠️ Tag $TAG_NAME already exists, skipping..."
-          else
-            git tag -a "$TAG_NAME" -m "Flutter production release $TAG_NAME"
+          if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
             git push origin "$TAG_NAME"
-            echo "✅ Created and pushed tag: $TAG_NAME"
+            echo "✅ Created tag: $TAG_NAME"
           fi
 
-  # Android deployment with optimization
-  deploy-android:
-    needs: setup-test-and-prepare
-    uses: ./.github/workflows/flutter-android-build.yml
-    with:
-      environment: 'release'
-      publish: true
-      version: ${{ needs.setup-test-and-prepare.outputs.version }}
-      version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
-      branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
-      build_artifacts: cd-flutter-android-artifacts-${{ github.run_number }}
-    secrets: inherit
-
-  # iOS deployment with optimization
-  deploy-ios:
-    needs: setup-test-and-prepare
-    uses: ./.github/workflows/flutter-ios-build.yml
-    with:
-      environment: 'release'
-      publish: true
-      version: ${{ needs.setup-test-and-prepare.outputs.version }}
-      version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
-      branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
-      cache_key: ${{ needs.setup-test-and-prepare.outputs.cache_key }}
-      build_artifacts: cd-flutter-ios-artifacts-${{ github.run_number }}
-    secrets: inherit
-
-  # Production deployment with manual approval
-  finalize-production-release:
-    if: needs.setup-test-and-prepare.outputs.is_production == 'true'
-    needs: [setup-test-and-prepare, deploy-android, deploy-ios, create-release-tag, build-analysis]
-    runs-on: ubuntu-latest
-    environment: production  # This triggers manual approval
-    
-    steps:
       - name: Create GitHub Release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ needs.setup-test-and-prepare.outputs.version }}
-          release_name: 'Flutter Production Release v${{ needs.setup-test-and-prepare.outputs.version }}'
+          tag_name: v${{ needs.setup.outputs.version }}
+          release_name: 'Release v${{ needs.setup.outputs.version }}'
           body: |
-            ## 🚀 Flutter Production Release v${{ needs.setup-test-and-prepare.outputs.version }}
+            ## 🚀 Flutter Release v${{ needs.setup.outputs.version }}
             
-            ### 📋 Release Information
-            - **Version:** v${{ needs.setup-test-and-prepare.outputs.version }}
-            - **Version Code:** ${{ needs.setup-test-and-prepare.outputs.version_code }}
-            - **Branch:** ${{ needs.setup-test-and-prepare.outputs.branch }}
-            - **Deployed by:** ${{ github.actor }}
+            ### 📱 Deployments
+            - **Android:** ✅ Google Play Store (Production)
+            - **iOS:** ✅ App Store
+            
+            ### 📋 Details
+            - **Version Code:** ${{ needs.setup.outputs.version_code }}
             - **Commit:** ${{ github.sha }}
-            - **Test Coverage:** ${{ needs.setup-test-and-prepare.outputs.coverage }}%
-            - **Flutter Version:** ${{ env.FLUTTER_VERSION }}
-            
-            ### ✅ Quality Checks Passed
-            - Code analysis (dart analyze)
-            - Code formatting check
-            - Unit and widget tests
-            - Build size analysis
-            
-            ### 📱 Platform Deployments
-            - **Android:** ${{ needs.deploy-android.result == 'success' && '✅ Deployed to Google Play' || '❌ Failed' }}
-            - **iOS:** ${{ needs.deploy-ios.result == 'success' && '✅ Deployed to App Store' || '❌ Failed' }}
+            - **Flutter:** ${{ env.FLUTTER_VERSION }}
             
             ### 🔗 Links
             - [Commit Details](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
             - [Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          draft: false
+          prerelease: false
 
-      - name: Production Release Summary
-        run: |
-          echo "## 🎉 Flutter Production Release Completed" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Release Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** v${{ needs.setup-test-and-prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Android Deploy:** ${{ needs.deploy-android.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **iOS Deploy:** ${{ needs.deploy-ios.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **GitHub Release:** ✅ Created" >> $GITHUB_STEP_SUMMARY
-
-  # 🆕 Deployment summary for all branches
+  # Final summary
   deployment-summary:
-    needs: [setup-test-and-prepare, deploy-android, deploy-ios, build-analysis]
+    needs: [setup, deploy-android, deploy-ios]
     if: always()
     runs-on: ubuntu-latest
     
     steps:
-      - name: Deployment Summary
+      - name: Final Summary
         run: |
-          echo "## 🚀 Flutter Continuous Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** ${{ needs.setup-test-and-prepare.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ needs.setup-test-and-prepare.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version Code:** ${{ needs.setup-test-and-prepare.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Test Coverage:** ${{ needs.setup-test-and-prepare.outputs.coverage }}%" >> $GITHUB_STEP_SUMMARY
-          echo "- **Flutter Version:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎉 Flutter Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "### 📊 Pipeline Results" >> $GITHUB_STEP_SUMMARY
-          echo "- **Setup & Tests:** ${{ needs.setup-test-and-prepare.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Analysis:** ${{ needs.build-analysis.result == 'success' && '✅ Completed' || '⚠️ Partial' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Android Deploy:** ${{ needs.deploy-android.result == 'success' && '✅ Success' || needs.deploy-android.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **iOS Deploy:** ${{ needs.deploy-ios.result == 'success' && '✅ Success' || needs.deploy-ios.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Release Info" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ needs.setup.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ needs.setup.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Deployment Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Android:** ${{ needs.deploy-android.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **iOS:** ${{ needs.deploy-ios.result == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
           
-          # Deployment track info
-          BRANCH="${{ needs.setup-test-and-prepare.outputs.branch }}"
-          case "$BRANCH" in
-            "master")
-              echo "### 🎯 Production Deployment" >> $GITHUB_STEP_SUMMARY
+          # Deployment tracks
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Deployment Tracks" >> $GITHUB_STEP_SUMMARY
+          case "${{ needs.setup.outputs.branch }}" in
+            "main")
               echo "- **Android:** Google Play Store (Production)" >> $GITHUB_STEP_SUMMARY
-              echo "- **iOS:** App Store (Production)" >> $GITHUB_STEP_SUMMARY
+              echo "- **iOS:** App Store" >> $GITHUB_STEP_SUMMARY
               ;;
-            "preprod")
-              echo "### 🧪 Pre-Production Deployment" >> $GITHUB_STEP_SUMMARY
-              echo "- **Android:** Google Play (Alpha Track)" >> $GITHUB_STEP_SUMMARY
+            "staging")
+              echo "- **Android:** Google Play (Beta)" >> $GITHUB_STEP_SUMMARY
               echo "- **iOS:** TestFlight (Beta)" >> $GITHUB_STEP_SUMMARY
               ;;
             *)
-              echo "### 🔬 Development Deployment" >> $GITHUB_STEP_SUMMARY
-              echo "- **Android:** Google Play (Internal Track)" >> $GITHUB_STEP_SUMMARY
+              echo "- **Android:** Google Play (Internal)" >> $GITHUB_STEP_SUMMARY
               echo "- **iOS:** TestFlight (Internal)" >> $GITHUB_STEP_SUMMARY
               ;;
           esac
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "*Flutter deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+          echo "*Deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY

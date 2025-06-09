@@ -1,131 +1,67 @@
-# .github/workflows/flutter-ios-build.yml - Flutter iOS Build and Deploy
-name: "Flutter iOS Build and Deploy"
+# .github/workflows/ios.yml - Simplified iOS Build & Deploy
+name: Flutter iOS CI/CD
 
 on:
-  workflow_call:
-    inputs:
-      environment:
-        required: true
-        type: string
-      publish:
-        required: false
-        type: boolean
-        default: false
-      version:
-        required: true
-        type: string
-      version_code:
-        required: true
-        type: string
-      branch:
-        required: true
-        type: string
-      # Accept pre-built dependencies cache
-      cache_key:
-        description: 'Dependencies cache key from main pipeline'
-        required: false
-        type: string
-        default: ''
-      # Accept pre-built Flutter artifacts
-      build_artifacts:
-        description: 'Pre-built Flutter build artifacts name'
-        required: false
-        type: string
-        default: ''
-    secrets:
-      APPLE_ID:
-        required: true
-      APPLE_ID_PASSWORD:
-        required: true
-      APP_STORE_CONNECT_API_KEY_ID:
-        required: true
-      APP_STORE_CONNECT_API_ISSUER_ID:
-        required: true
-      APP_STORE_CONNECT_API_KEY:
-        required: true
-      MATCH_PASSWORD:
-        required: true
-      MATCH_GIT_URL:
-        required: true
-      MATCH_PRIVATE_KEY:
-        required: false
+  push:
+    branches: [main, develop, staging]
+    paths:
+      - 'lib/**'
+      - 'ios/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - '.github/workflows/ios.yml'
 
 env:
-  FLUTTER_VERSION: '3.32.2'  # Latest stable Flutter version
+  FLUTTER_VERSION: '3.24.0'
   DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
 jobs:
-  build-ios:
-    runs-on: macos-15  # Latest stable macOS
-    timeout-minutes: 45  # Flutter iOS builds can take longer
+  build-and-deploy-ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
     
-    # Environment logic
+    # Environment protection
     environment: 
-      name: ${{ inputs.branch == 'master' && 'production' || inputs.branch }}
+      name: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
     
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 🎯 System information for debugging
-      - name: System Information
-        run: |
-          echo "🖥️ System Information:"
-          echo "- macOS: $(sw_vers -productVersion)"
-          echo "- Xcode: $(xcodebuild -version | head -1)"
-          echo "- Available Xcode versions:"
-          ls /Applications/ | grep Xcode || echo "  Only default Xcode available"
-          echo "- Ruby: $(ruby --version)"
-          echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
-
-      # 🎯 Setup Flutter Environment
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
           cache: true
 
-      # 🚀 Smart dependency handling - use cache if available
-      - name: Restore Dependencies Cache
-        id: restore-deps-cache
-        if: inputs.cache_key != ''
-        uses: actions/cache/restore@v4
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.4'
+
+      - name: Cache Flutter Dependencies
+        uses: actions/cache@v4
         with:
           path: |
             ${{ env.PUB_CACHE }}
             ~/Library/Caches/CocoaPods
             ~/Library/Developer/Xcode/DerivedData
             ~/.cocoapods
-          key: ${{ inputs.cache_key }}
+          key: ${{ runner.os }}-flutter-ios-${{ hashFiles('pubspec.lock', 'ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-ios-
 
-      - name: Get Flutter Dependencies
-        if: inputs.cache_key == '' || steps.restore-deps-cache.outputs.cache-hit != 'true'
+      - name: Get Dependencies
         run: flutter pub get
 
-      # 🎯 Smart Flutter build artifacts handling
-      - name: Download Pre-built Flutter Artifacts
-        if: inputs.build_artifacts != ''
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.build_artifacts }}
-          path: ./pre-built-artifacts/
-
-      - name: Setup Flutter Build Artifacts
+      - name: Install CocoaPods Dependencies
         run: |
-          if [ "${{ inputs.build_artifacts }}" != "" ] && [ -d "./pre-built-artifacts/Runner.app" ]; then
-            # Use pre-built artifacts
-            echo "✅ Using pre-built Flutter iOS artifacts"
-            mkdir -p build/ios/iphoneos/
-            cp -r ./pre-built-artifacts/Runner.app build/ios/iphoneos/ || echo "iOS app artifacts not available"
-            
-            if [ -d "build/ios/iphoneos/Runner.app" ]; then
-              echo "📦 Using pre-built iOS app"
-            fi
-          else
-            echo "🔄 Will create fresh Flutter iOS build..."
-          fi
+          cd ios
+          echo "📱 Installing CocoaPods dependencies..."
+          pod install
+          echo "✅ CocoaPods installation completed"
 
-      # 🔄 Enhanced Ruby setup
       - name: Setup Ruby for Fastlane
         uses: ruby/setup-ruby@v1
         with:
@@ -133,293 +69,112 @@ jobs:
           bundler-cache: true
           working-directory: ios
 
-      # 🚀 Enhanced iOS dependencies cache
-      - name: Cache iOS Build Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ios/Pods
-            ios/DerivedData
-            ios/build
-            ~/Library/Caches/CocoaPods
-            ~/Library/Developer/Xcode/DerivedData
-            ~/.cocoapods
-          key: ${{ runner.os }}-flutter-ios-${{ hashFiles('ios/Podfile.lock', 'pubspec.lock', 'ios/Runner.xcodeproj/project.pbxproj') }}
-          restore-keys: |
-            ${{ runner.os }}-flutter-ios-
-
-      - name: Cache Restore Debug
+      - name: Generate Version
+        id: version
         run: |
-          echo "🔍 Cache Restore Debug:"
-          echo "- Input Cache Key: ${{ inputs.cache_key }}"
-          echo "- Cache Hit: ${{ steps.restore-deps-cache.outputs.cache-hit }}"
-          echo "- Cache Primary Key: ${{ steps.restore-deps-cache.outputs.cache-primary-key }}"
-          echo "- Cache Matched Key: ${{ steps.restore-deps-cache.outputs.cache-matched-key }}"
+          BRANCH_NAME="${{ github.ref_name }}"
+          RUN_NUMBER="${{ github.run_number }}"
+          BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
           
-          # Check if pub cache exists
-          if [ -d "$PUB_CACHE" ]; then
-            echo "- Pub cache restored: $(du -sh $PUB_CACHE | cut -f1)"
-          else
-            echo "- Pub cache: Not restored"
-          fi
+          case "$BRANCH_NAME" in
+            "main")
+              VERSION="$BASE_VERSION"
+              VERSION_CODE=$((2000000 + RUN_NUMBER))
+              TARGET="app_store"
+              ;;
+            "staging")
+              VERSION="$BASE_VERSION-beta.$RUN_NUMBER"
+              VERSION_CODE=$((1500000 + RUN_NUMBER))
+              TARGET="testflight_beta"
+              ;;
+            *)
+              VERSION="$BASE_VERSION-alpha.$RUN_NUMBER"
+              VERSION_CODE=$((1000000 + RUN_NUMBER))
+              TARGET="testflight_internal"
+              ;;
+          esac
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
+          echo "🍎 iOS Version: $VERSION (code: $VERSION_CODE, target: $TARGET)"
 
-      # 🎯 Flutter version update in pubspec.yaml
-      - name: Update Flutter App Version
+      - name: Update pubspec.yaml Version
         run: |
-          echo "📱 Updating Flutter app version..."
-          echo "Target version: ${{ inputs.version }} (code: ${{ inputs.version_code }})"
-          
-          # Backup original
-          cp pubspec.yaml pubspec.yaml.backup
-          
-          # Update pubspec.yaml with new version
-          # Format: version: 1.2.3+123
-          sed -i '' "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
-          
-          # Verify the changes
-          echo "✅ Updated pubspec.yaml:"
-          grep "^version:" pubspec.yaml
+          sed -i '' "s/^version: .*/version: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}/" pubspec.yaml
+          echo "✅ Updated pubspec.yaml version"
 
-      # 🎯 Enhanced Pod installation
-      - name: Install CocoaPods Dependencies
-        run: |
-          cd ios
-          echo "📱 Installing CocoaPods dependencies..."
-          
-          # Check if cache hit
-          if [ -d "Pods" ] && [ -f "Podfile.lock" ]; then
-            echo "✅ Pods cache found, verifying integrity..."
-            pod install --deployment 2>/dev/null || {
-              echo "⚠️ Cache invalid, reinstalling..."
-              rm -rf Pods Podfile.lock
-              pod install
-            }
-          else
-            echo "🔄 Installing fresh Pods..."
-            pod install
-          fi
-          
-          # Post-install verification
-          if [ -d "Pods" ]; then
-            pod_count=$(find Pods -name "*.podspec" | wc -l)
-            echo "✅ CocoaPods installation completed: $pod_count pods"
-          else
-            echo "❌ CocoaPods installation failed!"
-            exit 1
-          fi
-
-      # 🔄 Enhanced Xcode setup
-      - name: Setup Xcode Environment
-        run: |
-          # Ensure we're using the default Xcode
-          sudo xcode-select -s /Applications/Xcode.app
-          
-          # Clear any derived data issues
-          rm -rf ~/Library/Developer/Xcode/DerivedData/Runner-*
-          
-          # Verify setup
-          echo "✅ Xcode setup completed:"
-          echo "- Selected: $(xcode-select -p)"
-          echo "- Version: $(xcodebuild -version)"
-          echo "- SDKs: $(xcodebuild -showsdks | grep iOS | tail -1)"
-
-      # 🔒 Enhanced SSH setup for Match (only when needed)
-      - name: Setup SSH for Match
-        if: inputs.environment == 'release'
-        uses: webfactory/ssh-agent@v0.9.1
-        with:
-          ssh-private-key: ${{ secrets.MATCH_PRIVATE_KEY }}
-        continue-on-error: true
-
-      # 🎯 Enhanced App Store Connect API setup
       - name: Setup App Store Connect API
-        if: inputs.environment == 'release'
         run: |
           mkdir -p /tmp/ios-keys
-          
-          # Check if API key is provided and setup
-          if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY }}" ]; then
-            echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /tmp/ios-keys/AuthKey.p8
-            
-            # Verify API key
-            if [ -f "/tmp/ios-keys/AuthKey.p8" ]; then
-              key_size=$(ls -lh /tmp/ios-keys/AuthKey.p8 | awk '{print $5}')
-              echo "✅ App Store Connect API key ready: $key_size"
-            else
-              echo "❌ API key creation failed!"
-              exit 1
-            fi
-          else
-            echo "⚠️ No App Store Connect API key provided - some deployment features may not work"
-          fi
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /tmp/ios-keys/AuthKey.p8
+          echo "✅ App Store Connect API key configured"
 
-      # 🚀 Enhanced Flutter iOS Debug Build
-      - name: Build Flutter iOS Debug
-        if: inputs.environment == 'debug'
+      - name: Run Tests
         run: |
-          echo "🔨 Building Flutter iOS Debug..."
-          
-          # Check if pre-built artifacts exist
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            echo "✅ Using pre-built iOS debug app"
-          else
-            # Pre-build validation
-            echo "📋 Pre-build checks:"
-            echo "- Flutter version: $(flutter --version | head -1)"
-            echo "- Xcode workspace: $(ls -la ios/*.xcworkspace)"
-            echo "- iOS schemes: $(xcodebuild -workspace ios/Runner.xcworkspace -list | grep Runner)"
-            echo "- Simulators: $(xcrun simctl list devices available | grep iPhone | head -3)"
-            
-            # Build with enhanced settings
-            flutter build ios --debug --no-codesign \
-              --build-name="${{ inputs.version }}" \
-              --build-number="${{ inputs.version_code }}" \
-              --verbose | tee build.log
-            
-            if [ $? -eq 0 ]; then
-              echo "✅ Flutter iOS Debug build completed successfully"
-              
-              # Build summary
-              if [ -f "build.log" ]; then
-                build_time=$(grep "Built build/ios" build.log | tail -1 || echo "Build time not found")
-                echo "⏱️ $build_time"
-              fi
-            else
-              echo "❌ Flutter iOS Debug build failed"
-              echo "📄 Last 30 lines of build log:"
-              tail -30 build.log
-              exit 1
-            fi
-          fi
+          echo "🧪 Running iOS tests..."
+          flutter test
 
-      # 🚀 Enhanced Release Build (No Deploy)
-      - name: Build Flutter iOS Release (No Deploy)
-        if: inputs.environment == 'release' && inputs.publish == false
-        env:
-          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
-          VERSION_NUMBER: ${{ inputs.version }}
-          BUILD_NUMBER: ${{ inputs.version_code }}
+      - name: Analyze Code
         run: |
-          cd ios
-          echo "🔨 Building Flutter iOS Release (No Deploy)..."
-          
-          # Check if pre-built artifacts exist
-          if [ -d "../build/ios/iphoneos/Runner.app" ]; then
-            echo "✅ Using pre-built iOS release app, will re-sign for release"
-          fi
-          
-          # Pre-build setup
-          echo "📋 Release build configuration:"
-          echo "- Version: $VERSION_NUMBER"
-          echo "- Build: $BUILD_NUMBER"
-          echo "- Match URL configured: $([ -n "$MATCH_GIT_URL" ] && echo "Yes" || echo "No")"
-          
-          # Build with Fastlane
-          if bundle exec fastlane build_only; then
-            echo "✅ Flutter iOS Release build completed successfully"
-            
-            # Find and report built artifacts
-            if [ -d "build" ]; then
-              echo "📦 Build artifacts:"
-              ls -la build/*.ipa 2>/dev/null || echo "No IPA files found"
-              
-              # Report sizes
-              for ipa in build/*.ipa; do
-                if [ -f "$ipa" ]; then
-                  ipa_size=$(ls -lh "$ipa" | awk '{print $5}')
-                  echo "- $(basename "$ipa"): $ipa_size"
-                fi
-              done
-            fi
-          else
-            echo "❌ Flutter iOS Release build failed"
-            echo "🔍 Checking Fastlane logs..."
-            ls -la fastlane/logs/ 2>/dev/null || echo "No Fastlane logs found"
-            exit 1
-          fi
+          echo "🔍 Running code analysis..."
+          flutter analyze
 
-      # 🚀 Enhanced Build and Deploy
-      - name: Build and Deploy to TestFlight/App Store
-        if: inputs.environment == 'release' && inputs.publish == true
+      - name: Build and Deploy iOS
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
           APP_STORE_CONNECT_API_KEY_PATH: /tmp/ios-keys/AuthKey.p8
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
-          VERSION_NUMBER: ${{ inputs.version }}
-          BUILD_NUMBER: ${{ github.run_number }}
+          VERSION_NUMBER: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.version_code }}
         run: |
           cd ios
-          echo "🚀 Building and deploying Flutter iOS to App Store Connect..."
+          echo "🔨 Building and deploying iOS..."
           
-          # Pre-deploy validation
-          echo "📋 Deployment configuration:"
-          echo "- Target: ${{ inputs.branch }}"
-          echo "- Version: $VERSION_NUMBER"
-          echo "- Build: $BUILD_NUMBER"
-          echo "- API Key ID: ${APP_STORE_CONNECT_API_KEY_ID:0:8}..."
-          echo "- API Key file: $([ -f "$APP_STORE_CONNECT_API_KEY_PATH" ] && echo "Ready" || echo "Missing")"
+          # Build and deploy with Fastlane
+          bundle exec fastlane ios deploy \
+            target:"${{ steps.version.outputs.target }}" \
+            version:"$VERSION_NUMBER" \
+            build_number:"$BUILD_NUMBER"
           
-          # Determine deployment track
-          TRACK="TestFlight Internal"
-          case "${{ inputs.branch }}" in
-            "master") TRACK="App Store" ;;
-            "preprod") TRACK="TestFlight Beta" ;;
-          esac
-          echo "- Deployment track: $TRACK"
-          
-          # Deploy with Fastlane
-          if bundle exec fastlane deploy_${{ inputs.branch }}; then
-            echo "✅ Flutter iOS deployment to $TRACK completed successfully"
-          else
-            echo "❌ Flutter iOS deployment failed"
-            echo "🔍 Fastlane logs:"
-            find fastlane/logs -name "*.log" -exec echo "=== {} ===" \; -exec tail -50 {} \; 2>/dev/null || echo "No Fastlane logs found"
-            exit 1
-          fi
+          echo "✅ iOS build and deploy completed"
 
-      # 🎯 Enhanced artifacts upload
-      - name: Upload iOS Build Artifacts
-        if: inputs.publish == false && inputs.environment == 'release'
+      - name: Upload Build Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-ios-${{ inputs.environment }}-${{ inputs.version }}-${{ github.run_number }}
+          name: ios-release-${{ steps.version.outputs.version }}-${{ github.run_number }}
           path: |
             ios/build/*.ipa
             ios/build/*.dSYM.zip
-            build.log
             ios/fastlane/logs/*.log
-          retention-days: 7
-          compression-level: 6
+          retention-days: 30
 
-      # 🎯 Enhanced build summary
-      - name: Generate Build Summary
-        if: always()
+      - name: iOS Build Summary
         run: |
-          echo "## 🍎 Flutter iOS Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Number:** ${{ inputs.version_code }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Flutter Version:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Runner:** ${{ runner.os }} ($(sw_vers -productVersion))" >> $GITHUB_STEP_SUMMARY
-          echo "- **Xcode:** $(xcodebuild -version | head -1)" >> $GITHUB_STEP_SUMMARY
+          echo "## 🍎 iOS Build & Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number:** ${{ steps.version.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** ${{ steps.version.outputs.target }}" >> $GITHUB_STEP_SUMMARY
           
-          # Build status
-          if [ "${{ job.status }}" = "success" ]; then
-            echo "- **Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- **Build Status:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
-          fi
+          # Deployment target description
+          case "${{ steps.version.outputs.target }}" in
+            "app_store")
+              echo "- **Deployment:** 🏪 App Store (Production)" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "testflight_beta")
+              echo "- **Deployment:** 🧪 TestFlight (Beta)" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "testflight_internal")
+              echo "- **Deployment:** 🔬 TestFlight (Internal)" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
           
-          # File sizes and details
+          # File sizes
           if [ -d "ios/build" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
-            
             for ipa in ios/build/*.ipa; do
               if [ -f "$ipa" ]; then
                 ipa_name=$(basename "$ipa")
@@ -427,54 +182,16 @@ jobs:
                 echo "- **$ipa_name:** $ipa_size" >> $GITHUB_STEP_SUMMARY
               fi
             done
-            
-            # dSYM files
-            for dsym in ios/build/*.dSYM.zip; do
-              if [ -f "$dsym" ]; then
-                dsym_name=$(basename "$dsym")
-                dsym_size=$(ls -lh "$dsym" | awk '{print $5}')
-                echo "- **$dsym_name:** $dsym_size" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
           fi
           
-          # Deployment info
-          if [ "${{ inputs.publish }}" = "true" ]; then
-            TRACK="TestFlight Internal"
-            case "${{ inputs.branch }}" in
-              "master") TRACK="App Store" ;;
-              "preprod") TRACK="TestFlight Beta" ;;
-            esac
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🚀 Deployment" >> $GITHUB_STEP_SUMMARY
-            echo "- **Target:** $TRACK" >> $GITHUB_STEP_SUMMARY
-            echo "- **Status:** ✅ Deployed successfully" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ inputs.environment }}" = "release" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
-            echo "- **Status:** Available for download" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Performance metrics
-          if [ -f "build.log" ]; then
-            if grep -q "Built build/ios" build.log; then
-              build_time=$(grep "Built build/ios" build.log | tail -1 | grep -o '[0-9]*\.[0-9]*s' || echo "Unknown")
-              if [ "$build_time" != "Unknown" ]; then
-                echo "- **Build Time:** $build_time" >> $GITHUB_STEP_SUMMARY
-              fi
-            fi
-          fi
-          
+          echo "- **Status:** ✅ Build and Deploy Successful" >> $GITHUB_STEP_SUMMARY
+          echo "- **Xcode:** $(xcodebuild -version | head -1)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "*Flutter iOS build completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+          echo "*iOS deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 
-      # 🧹 Cleanup sensitive files
-      - name: Cleanup Sensitive Files
+      - name: Cleanup
         if: always()
         run: |
           rm -rf /tmp/ios-keys
-          
-          # Clean up Fastlane temporary files
-          rm -rf ios/fastlane/tmp 2>/dev/null || true
-          
-          echo "✅ Sensitive files cleaned up"
+          echo "✅ Cleanup completed"

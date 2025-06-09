@@ -1,440 +1,115 @@
-# ios/fastlane/Fastfile - Flutter iOS version management with API key object fix
+# ios/fastlane/Fastfile - iOS Fastlane Configuration
 default_platform(:ios)
 
 platform :ios do
-  
   before_all do
-    setup_circle_ci if ENV['CI']
-    ensure_bundle_exec
-    auto_update_version if ENV['GITHUB_RUN_NUMBER']
+    setup_ci if ENV['CI']
+    app_store_connect_api_key(
+      key_id: ENV['APP_STORE_CONNECT_API_KEY_ID'],
+      issuer_id: ENV['APP_STORE_CONNECT_API_ISSUER_ID'],
+      key_filepath: ENV['APP_STORE_CONNECT_API_KEY_PATH']
+    ) if ENV['APP_STORE_CONNECT_API_KEY_ID']
   end
 
-  # ✨ Auto version management for Flutter
-  private_lane :auto_update_version do
-    begin
-      # ดึง version จาก pubspec.yaml
-      pubspec_path = File.expand_path('../../pubspec.yaml')
-      if File.exist?(pubspec_path)
-        pubspec_content = File.read(pubspec_path)
-        version_line = pubspec_content.match(/^version:\s*(.+)$/)
-        if version_line
-          version_string = version_line[1].strip
-          # Split version and build number (format: 1.2.3+123)
-          if version_string.include?('+')
-            version_parts = version_string.split('+')
-            new_version = version_parts[0]
-            build_number = version_parts[1]
-          else
-            new_version = version_string
-            build_number = ENV['GITHUB_RUN_NUMBER'] || "1"
-          end
-        else
-          UI.error("Version not found in pubspec.yaml, using default")
-          new_version = "1.0.0"
-          build_number = ENV['GITHUB_RUN_NUMBER'] || "1"
-        end
-      else
-        UI.error("pubspec.yaml not found, using default version")
-        new_version = "1.0.0"
-        build_number = ENV['GITHUB_RUN_NUMBER'] || "1"
-      end
-      
-      branch = ENV['GITHUB_REF_NAME'] || 'develop'
-      
-      # อัพเดท iOS version โดยใช้ Flutter command
-      sh("cd .. && flutter build ios --build-name=#{new_version} --build-number=#{build_number} --release --no-codesign") do |status|
-        if status.success?
-          UI.success("✅ Flutter iOS build completed with version update")
-        else
-          UI.error("❌ Flutter iOS build failed, falling back to Xcode version update")
-          
-          # Fallback: อัพเดท iOS version โดยใช้ Fastlane actions
-          increment_version_number(
-            version_number: new_version,
-            xcodeproj: "Runner.xcodeproj"
-          )
-          
-          increment_build_number(
-            build_number: build_number,
-            xcodeproj: "Runner.xcodeproj"
-          )
-        end
-      end
-      
-      UI.success("✅ Auto updated Flutter iOS version:")
-      UI.success("   CFBundleShortVersionString: #{new_version}")
-      UI.success("   CFBundleVersion: #{build_number}")
-      UI.success("   branch: #{branch}")
-      
-    rescue => e
-      UI.error("❌ Failed to auto update version: #{e.message}")
-      UI.error("Continuing with existing version...")
-    end
-  end
-
-  # ✨ Manual version management for Flutter
-  lane :set_version do |options|
-    version = options[:version] || prompt(text: "Enter version (e.g., 1.2.3):")
-    build = options[:build] || prompt(text: "Enter build number (e.g., 123):")
-    
-    # Update pubspec.yaml first
-    pubspec_path = "../pubspec.yaml"
-    pubspec_content = File.read(pubspec_path)
-    updated_content = pubspec_content.gsub(/^version:\s*.*$/, "version: #{version}+#{build}")
-    File.write(pubspec_path, updated_content)
-    
-    # Then build with Flutter
-    sh("cd .. && flutter build ios --build-name=#{version} --build-number=#{build} --release --no-codesign")
-    
-    UI.success("✅ Manually set Flutter iOS version:")
-    UI.success("   CFBundleShortVersionString: #{version}")
-    UI.success("   CFBundleVersion: #{build}")
-  end
-
-  lane :bump_version do |options|
-    type = options[:type] || "patch"
-    
-    # อ่าน version ปัจจุบันจาก pubspec.yaml
-    pubspec_path = "../pubspec.yaml"
-    pubspec_content = File.read(pubspec_path)
-    
-    version_line = pubspec_content.match(/^version:\s*(.+)$/)
-    if version_line
-      version_string = version_line[1].strip
-      if version_string.include?('+')
-        version_parts = version_string.split('+')
-        current_version = version_parts[0]
-        current_build = version_parts[1].to_i
-      else
-        current_version = version_string
-        current_build = 1
-      end
-    else
-      current_version = "1.0.0"
-      current_build = 1
-    end
-    
-    # Parse semantic version
-    version_parts = current_version.split('.').map(&:to_i)
-    
-    case type
-    when "major"
-      version_parts[0] += 1
-      version_parts[1] = 0
-      version_parts[2] = 0
-    when "minor"
-      version_parts[1] += 1
-      version_parts[2] = 0
-    when "patch"
-      version_parts[2] += 1
-    end
-    
-    new_version = version_parts.join('.')
-    new_build = current_build + 1
-    
-    # Update pubspec.yaml
-    updated_content = pubspec_content.gsub(/^version:\s*.*$/, "version: #{new_version}+#{new_build}")
-    File.write(pubspec_path, updated_content)
-    
-    # Build with Flutter
-    sh("cd .. && flutter build ios --build-name=#{new_version} --build-number=#{new_build.to_s} --release --no-codesign")
-    
-    UI.success("✅ Bumped #{type} version:")
-    UI.success("   #{current_version} -> #{new_version}")
-    UI.success("   build: #{current_build} -> #{new_build}")
-  end
-
-  # 🚀 Deployment lanes (updated for Flutter)
-  lane :deploy_develop do
-    UI.message("🚀 Deploying Flutter iOS to TestFlight Internal...")
-    build_and_deploy(
-      groups: ["Internal Testers", "Developers"],
-      skip_waiting: true
-    )
-    # notify_slack("🚀 Flutter iOS Development build uploaded to TestFlight Internal!")
-  end
-
-  lane :deploy_preprod do
-    UI.message("🚀 Deploying Flutter iOS to TestFlight Beta...")
-    build_and_deploy(
-      groups: ["Beta Testers", "QA Team"],
-      skip_waiting: false
-    )
-    # notify_slack("🚀 Flutter iOS Pre-production build uploaded to TestFlight Beta!")
-  end
-
-  # 🔧 deploy_master ใช้ API key object for Flutter
-  lane :deploy_master do
-    UI.message("🎉 Deploying Flutter iOS to App Store...")
-    setup_certificates
-    build_release_app
-    
-    upload_options = {
-      force: true,
-      submit_for_review: false,
-      automatic_release: false,
-      skip_metadata: true,
-      skip_screenshots: true,
-      precheck_include_in_app_purchases: false
-    }
-    
-    # ✅ ใช้ API key object แทน path
-    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
-    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
-    api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
-    
-    if api_key_id && api_issuer_id && api_key_content_base64
-      begin
-        require 'base64'
-        api_key_content = Base64.decode64(api_key_content_base64)
-        
-        UI.message("✅ Creating App Store Connect API configuration for App Store")
-        UI.message("   Key ID: #{api_key_id}")
-        UI.message("   Issuer ID: #{api_issuer_id}")
-        
-        app_store_connect_api_key = {
-          key_id: api_key_id,
-          issuer_id: api_issuer_id,
-          key: api_key_content,
-          duration: 1200,
-          in_house: false
-        }
-        
-        upload_options[:api_key] = app_store_connect_api_key
-        UI.success("✅ Using API key for App Store upload")
-      rescue => e
-        UI.error("❌ API key setup failed: #{e.message}")
-        UI.message("⚠️ Falling back to traditional auth")
-      end
-    else
-      UI.message("⚠️ API key not available for App Store upload, using traditional auth")
-    end
-    
-    upload_to_app_store(upload_options)
-    # notify_slack("🎉 Flutter iOS Production build uploaded to App Store Connect!")
-  end
-
+  desc "Build iOS app without deploying"
   lane :build_only do
-    UI.message("🔨 Building Flutter iOS app...")
-    setup_certificates
-    build_release_app
-    UI.success("✅ Flutter iOS build completed successfully!")
-  end
-
-  lane :submit_for_review do
-    UI.message("📋 Submitting Flutter iOS for App Store review...")
-    
-    upload_options = {
-      skip_binary_upload: true,
-      submit_for_review: true,
-      automatic_release: false,
-      force: true,
-      submission_information: submission_info
-    }
-    
-    # ✅ ใช้ API key object แทน path
-    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
-    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
-    api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
-    
-    if api_key_id && api_issuer_id && api_key_content_base64
-      begin
-        require 'base64'
-        api_key_content = Base64.decode64(api_key_content_base64)
-        
-        app_store_connect_api_key = {
-          key_id: api_key_id,
-          issuer_id: api_issuer_id,
-          key: api_key_content,
-          duration: 1200,
-          in_house: false
-        }
-        
-        upload_options[:api_key] = app_store_connect_api_key
-        UI.success("✅ Using API key for App Store review submission")
-      rescue => e
-        UI.error("❌ API key setup failed: #{e.message}")
-      end
-    end
-    
-    upload_to_app_store(upload_options)
-    # notify_slack("📋 Flutter iOS app submitted for App Store review!")
-  end
-
-  # 🔧 setup_certificates for Flutter
-  private_lane :setup_certificates do
-    UI.message("🔐 Setting up certificates for Flutter iOS...")
-    
-    # ใช้แค่ Match กับ traditional auth
+    # Setup certificates and provisioning profiles
     match(
       type: "appstore",
-      readonly: true
+      readonly: true,
+      git_url: ENV['MATCH_GIT_URL'],
+      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
     )
     
-    UI.success("✅ Certificates setup completed")
-  end
-
-  private_lane :build_release_app do
-    # Check if we already have a built Flutter iOS app
-    app_path = "../build/ios/iphoneos/Runner.app"
+    # Build Flutter iOS
+    sh("cd .. && flutter build ios --release --no-codesign")
     
-    if Dir.exist?(app_path)
-      UI.success("✅ Found existing Flutter iOS app, will re-sign for release")
-    else
-      UI.message("🔄 Building fresh Flutter iOS app...")
-      sh("cd .. && flutter build ios --release --no-codesign")
-    end
-    
-    # Build IPA with Fastlane
+    # Build and archive with Xcode
     build_app(
-      scheme: "Runner",
       workspace: "Runner.xcworkspace",
-      configuration: "Release",
+      scheme: "Runner",
       export_method: "app-store",
-      clean: false,  # Don't clean since we might have pre-built Flutter app
-      output_directory: "./build",
-      output_name: "Runner.ipa",
-      include_bitcode: false,
-      export_options: {
-        provisioningProfiles: {
-          "test.cicd.appibc" => "match AppStore test.cicd.appibc"  # Update to your Flutter app's bundle ID
-        }
-      }
+      output_directory: "build",
+      output_name: "Runner.ipa"
     )
-  end
-
-  # 🔧 build_and_deploy ใช้ API key object for Flutter
-  private_lane :build_and_deploy do |options|
-    setup_certificates
-    build_release_app
     
-    upload_options = {
-      skip_waiting_for_build_processing: options[:skip_waiting],
-      groups: options[:groups],
-      distribute_external: false,
-      notify_external_testers: false,
-      changelog: "Flutter automated build from #{ENV['GITHUB_REF_NAME']} branch"
-    }
+    UI.success("✅ iOS build completed successfully!")
+  end
+
+  desc "Deploy to App Store Connect"
+  lane :deploy do |options|
+    target = options[:target] || "testflight_internal"
+    version = options[:version] || "1.0.0"
+    build_number = options[:build_number] || "1"
     
-    # ✅ ใช้ API key content โดยตรง แทน path
-    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
-    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
-    api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
+    UI.message("🍎 Building and deploying iOS - Target: #{target}")
+    UI.message("📋 Version: #{version} (#{build_number})")
     
-    if api_key_id && api_issuer_id && api_key_content_base64
-      begin
-        # Decode API key content
-        require 'base64'
-        api_key_content = Base64.decode64(api_key_content_base64)
-        
-        UI.message("✅ Creating App Store Connect API configuration for TestFlight")
-        UI.message("   Key ID: #{api_key_id}")
-        UI.message("   Issuer ID: #{api_issuer_id}")
-        UI.message("   Content length: #{api_key_content.length} characters")
-        
-        # สร้าง App Store Connect API object
-        app_store_connect_api_key = {
-          key_id: api_key_id,
-          issuer_id: api_issuer_id,
-          key: api_key_content,
-          duration: 1200, # 20 minutes
-          in_house: false
-        }
-        
-        upload_options[:api_key] = app_store_connect_api_key
-        UI.success("✅ Using App Store Connect API for TestFlight upload")
-        
-      rescue => e
-        UI.error("❌ Failed to setup API key: #{e.message}")
-        UI.error("   Error class: #{e.class}")
-        UI.message("⚠️ Falling back to traditional auth")
-      end
-    else
-      UI.message("⚠️ API key not available, using traditional auth")
-      missing_items = []
-      missing_items << "API_KEY_ID" unless api_key_id
-      missing_items << "ISSUER_ID" unless api_issuer_id  
-      missing_items << "KEY_CONTENT" unless api_key_content_base64
-      UI.message("Missing: #{missing_items.join(', ')}")
-    end
+    # Setup certificates
+    match(
+      type: "appstore",
+      readonly: true,
+      git_url: ENV['MATCH_GIT_URL'],
+      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+    )
     
-    upload_to_testflight(upload_options)
-  end
-
-  # 🆕 Flutter specific lanes
-  lane :flutter_clean do
-    UI.message("🧹 Cleaning Flutter project...")
-    sh("cd .. && flutter clean")
-    sh("cd .. && flutter pub get")
-    sh("cd . && pod install")  # Also clean iOS pods
-    UI.success("✅ Flutter project and iOS pods cleaned")
-  end
-
-  lane :flutter_analyze do
-    UI.message("🔍 Running Flutter code analysis...")
-    sh("cd .. && flutter analyze")
-    UI.success("✅ Flutter code analysis completed")
-  end
-
-  lane :flutter_test do
-    UI.message("🧪 Running Flutter tests...")
-    sh("cd .. && flutter test")
-    UI.success("✅ Flutter tests completed")
-  end
-
-  lane :flutter_build_debug do
-    UI.message("🔨 Building Flutter iOS debug...")
-    sh("cd .. && flutter build ios --debug --no-codesign")
+    # Update version numbers
+    increment_version_number(version_number: version)
+    increment_build_number(build_number: build_number)
     
-    app_path = "../build/ios/iphoneos/Runner.app"
-    if Dir.exist?(app_path)
-      UI.success("✅ Flutter iOS debug app built successfully!")
-    else
-      UI.error("❌ Flutter iOS debug app not found!")
-    end
-  end
-
-  private_lane :submission_info do
-    {
-      add_id_info_limits_tracking: true,
-      add_id_info_serves_ads: false,
-      add_id_info_tracks_action: true,
-      add_id_info_tracks_install: true,
-      add_id_info_uses_idfa: true,
-      content_rights_has_rights: true,
-      content_rights_contains_third_party_content: true,
-      export_compliance_platform: 'ios',
-      export_compliance_compliance_required: false,
-      export_compliance_encryption_updated: false,
-      export_compliance_uses_encryption: false,
-      export_compliance_is_exempt: false,
-      export_compliance_contains_third_party_cryptography: false,
-      export_compliance_contains_proprietary_cryptography: false,
-      export_compliance_available_on_french_store: false
-    }
-  end
-
-  private_lane :notify_slack do |message|
-    return unless ENV["SLACK_URL"]
+    # Build Flutter iOS
+    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
     
-    begin
-      slack(
-        message: message,
-        channel: "#releases",
-        webhook_url: ENV["SLACK_URL"],
-        username: "Flutter iOS CI/CD",
-        icon_emoji: ":apple:"
+    # Build and archive
+    build_app(
+      workspace: "Runner.xcworkspace",
+      scheme: "Runner",
+      export_method: "app-store",
+      output_directory: "build",
+      output_name: "Runner.ipa"
+    )
+    
+    # Deploy based on target
+    case target
+    when "app_store"
+      UI.message("📤 Uploading to App Store...")
+      upload_to_app_store(
+        ipa: "build/Runner.ipa",
+        skip_metadata: true,
+        skip_screenshots: true,
+        submit_for_review: false
       )
-    rescue => e
-      UI.error("Failed to send Slack notification: #{e.message}")
+    when "testflight_beta"
+      UI.message("📤 Uploading to TestFlight (Beta)...")
+      upload_to_testflight(
+        ipa: "build/Runner.ipa",
+        groups: ["Beta Testers"],
+        notify_external_testers: true
+      )
+    when "testflight_internal"
+      UI.message("📤 Uploading to TestFlight (Internal)...")
+      upload_to_testflight(
+        ipa: "build/Runner.ipa",
+        distribute_external: false,
+        notify_external_testers: false
+      )
+    else
+      UI.user_error!("Unknown target: #{target}")
     end
+    
+    UI.success("✅ Successfully deployed to #{target}!")
   end
-
-  # Error handling
-  error do |lane, exception|
-    error_message = "❌ Flutter iOS deployment failed in lane '#{lane}': #{exception.message}"
-    UI.error(error_message)
-    # notify_slack(error_message) if defined?(notify_slack)
-    raise exception
+  
+  desc "Deploy to specific branch target"
+  lane :deploy_main do
+    deploy(target: "app_store")
+  end
+  
+  lane :deploy_staging do
+    deploy(target: "testflight_beta")
+  end
+  
+  lane :deploy_develop do
+    deploy(target: "testflight_internal")
   end
 end
