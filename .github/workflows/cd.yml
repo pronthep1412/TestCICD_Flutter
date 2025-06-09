@@ -58,25 +58,25 @@ jobs:
           echo "is_production=$IS_PRODUCTION" >> $GITHUB_OUTPUT
 
   # Call reusable workflows (แนะนำ)
-  deploy-android:
-    needs: setup
-    uses: ./.github/workflows/flutter-android-build.yml
-    with:
-      version: ${{ needs.setup.outputs.version }}
-      version_code: ${{ needs.setup.outputs.version_code }}
-      branch: ${{ needs.setup.outputs.branch }}
-      is_production: ${{ needs.setup.outputs.is_production }}
-    secrets: inherit
-
-  # deploy-ios:
+  # deploy-android:
   #   needs: setup
-  #   uses: ./.github/workflows/flutter-ios-build.yml
+  #   uses: ./.github/workflows/flutter-android-build.yml
   #   with:
   #     version: ${{ needs.setup.outputs.version }}
   #     version_code: ${{ needs.setup.outputs.version_code }}
   #     branch: ${{ needs.setup.outputs.branch }}
   #     is_production: ${{ needs.setup.outputs.is_production }}
   #   secrets: inherit
+
+  deploy-ios:
+    needs: setup
+    uses: ./.github/workflows/flutter-ios-build.yml
+    with:
+      version: ${{ needs.setup.outputs.version }}
+      version_code: ${{ needs.setup.outputs.version_code }}
+      branch: ${{ needs.setup.outputs.branch }}
+      is_production: ${{ needs.setup.outputs.is_production }}
+    secrets: inherit
 
   # create-release:
   #   needs: [setup, deploy-android, deploy-ios]
