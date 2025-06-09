@@ -209,7 +209,7 @@ jobs:
           # Create Appfile
           cat > fastlane/Appfile << EOF
           json_key_file("google-play-key.json")
-          package_name("${{ vars.ANDROID_PACKAGE_NAME || 'com.example.app' }}")
+          package_name("${{ vars.ANDROID_PACKAGE_NAME || 'test.cicd.appibc' }}")
           EOF
           
           # Create enhanced Fastfile
