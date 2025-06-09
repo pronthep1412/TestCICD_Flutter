@@ -206,8 +206,7 @@ jobs:
           echo "🔨 Building Android AAB..."
           flutter build appbundle --release \
             --build-name="${{ steps.version.outputs.version }}" \
-            --build-number="${{ steps.version.outputs.version_code }}" \
-            --verbose
+            --build-number="${{ steps.version.outputs.version_code }}"
           
           # Verify AAB exists and copy
           if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
