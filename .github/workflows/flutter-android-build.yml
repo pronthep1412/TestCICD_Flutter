@@ -1,4 +1,4 @@
-# .github/workflows/android-reusable.yml - Reusable Android Workflow
+# .github/workflows/android-reusable.yml - FIXED with Ruby Setup
 name: Android Build & Deploy
 
 on:
@@ -29,7 +29,6 @@ on:
       GOOGLE_PLAY_JSON_KEY:
         required: true
   
-  # Manual trigger (ใช้สำหรับ hotfix หรือ emergency deploy)
   workflow_dispatch:
     inputs:
       version:
@@ -46,12 +45,12 @@ on:
         default: 'develop'
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: '3.24.0'
 
 jobs:
   build-and-deploy-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     environment: 
       name: ${{ inputs.branch == 'main' && 'production' || inputs.branch }}
     
@@ -63,50 +62,217 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
           cache: true
 
-      - name: Get Dependencies
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Flutter Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            ~/.android/build-cache
+          key: ${{ runner.os }}-flutter-android-${{ hashFiles('pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-android-
+
+      - name: Get Flutter Dependencies
         run: flutter pub get
 
       - name: Update Version
         run: |
           sed -i "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
+          echo "✅ Updated version to: ${{ inputs.version }}+${{ inputs.version_code }}"
 
       - name: Setup Android Signing
         run: |
+          echo "🔑 Setting up Android signing..."
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > android/app/keystore.jks
+          
           cat > android/key.properties << EOF
           storeFile=keystore.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
           EOF
+          
+          echo "✅ Android signing configured"
 
       - name: Build Android AAB
         run: |
+          echo "🔨 Building Android App Bundle..."
           flutter build appbundle --release \
             --build-name="${{ inputs.version }}" \
             --build-number="${{ inputs.version_code }}"
+          
+          # Verify build
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
+            echo "✅ AAB built successfully: $aab_size"
+          else
+            echo "❌ AAB build failed!"
+            exit 1
+          fi
 
-      - name: Deploy to Google Play
+      # 🆕 Critical: Setup Ruby for Fastlane
+      - name: Setup Ruby for Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: android
+
+      # 🆕 Ensure Fastlane dependencies are installed
+      - name: Install Fastlane Dependencies
         run: |
           cd android
+          echo "📦 Installing Fastlane dependencies..."
+          
+          # Create Gemfile if not exists
+          if [ ! -f "Gemfile" ]; then
+            cat > Gemfile << EOF
+          source "https://rubygems.org"
+          
+          gem "fastlane", "~> 2.217.0"
+          gem "bundler", "~> 2.4.0"
+          EOF
+          fi
+          
+          # Install dependencies
+          bundle install
+          echo "✅ Fastlane dependencies installed"
+
+      - name: Setup Google Play Credentials
+        run: |
+          cd android
+          echo "🔑 Setting up Google Play credentials..."
           echo "${{ secrets.GOOGLE_PLAY_JSON_KEY }}" | base64 -d > google-play-key.json
           
+          # Verify credentials file
+          if [ -f "google-play-key.json" ]; then
+            file_size=$(ls -lh google-play-key.json | awk '{print $5}')
+            echo "✅ Google Play credentials ready: $file_size"
+          else
+            echo "❌ Failed to create credentials file!"
+            exit 1
+          fi
+
+      - name: Create Fastlane Configuration
+        run: |
+          cd android
+          
+          # Create fastlane directory if not exists
+          mkdir -p fastlane
+          
+          # Create Appfile
+          cat > fastlane/Appfile << EOF
+          json_key_file("google-play-key.json")
+          package_name("${{ vars.ANDROID_PACKAGE_NAME || 'com.example.app' }}")
+          EOF
+          
+          # Create Fastfile if not exists
+          if [ ! -f "fastlane/Fastfile" ]; then
+            cat > fastlane/Fastfile << 'EOF'
+          default_platform(:android)
+          
+          platform :android do
+            desc "Deploy to Google Play Store"
+            lane :deploy do |options|
+              track = options[:track] || "internal"
+              aab_path = options[:aab] || "../build/app/outputs/bundle/release/app-release.aab"
+              
+              UI.message("🚀 Deploying to Google Play - Track: #{track}")
+              UI.message("📦 AAB: #{aab_path}")
+              
+              unless File.exist?(aab_path)
+                UI.user_error!("AAB file not found: #{aab_path}")
+              end
+              
+              upload_to_play_store(
+                track: track,
+                aab: aab_path,
+                skip_upload_metadata: true,
+                skip_upload_images: true,
+                skip_upload_screenshots: true,
+                release_status: track == "production" ? "completed" : "draft"
+              )
+              
+              UI.success("✅ Successfully deployed to #{track} track!")
+            end
+          end
+          EOF
+          fi
+          
+          echo "✅ Fastlane configuration ready"
+
+      - name: Deploy to Google Play Store
+        run: |
+          cd android
+          echo "🚀 Deploying to Google Play Store..."
+          
+          # Determine track
           TRACK="internal"
           case "${{ inputs.branch }}" in
             "main") TRACK="production" ;;
             "staging") TRACK="beta" ;;
+            *) TRACK="internal" ;;
           esac
           
-          bundle exec fastlane android deploy \
+          echo "📤 Deploying to track: $TRACK"
+          
+          # Deploy using Fastlane
+          bundle exec fastlane deploy \
             track:$TRACK \
-            aab:"../build/app/outputs/bundle/release/app-release.aab" \
-            json_key:"google-play-key.json"
+            aab:"../build/app/outputs/bundle/release/app-release.aab"
+          
+          echo "✅ Deployment completed successfully!"
 
-      - name: Cleanup
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-${{ inputs.version }}-${{ github.run_number }}
+          path: |
+            build/app/outputs/bundle/release/*.aab
+            build/app/outputs/flutter-apk/*.apk
+            android/fastlane/logs/*.log
+          retention-days: 30
+
+      - name: Android Build Summary
+        run: |
+          echo "## 🤖 Android Build & Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version Code:** ${{ inputs.version_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine track for display
+          TRACK="Internal"
+          case "${{ inputs.branch }}" in
+            "main") TRACK="Production" ;;
+            "staging") TRACK="Beta" ;;
+          esac
+          echo "- **Track:** $TRACK" >> $GITHUB_STEP_SUMMARY
+          
+          # File sizes
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
+            echo "- **AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "- **Status:** ✅ Build and Deploy Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Android deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup Sensitive Files
         if: always()
         run: |
           rm -f android/app/keystore.jks
           rm -f android/key.properties
           rm -f android/google-play-key.json
+          echo "✅ Cleanup completed"

@@ -68,32 +68,32 @@ jobs:
       is_production: ${{ needs.setup.outputs.is_production }}
     secrets: inherit
 
-  deploy-ios:
-    needs: setup
-    uses: ./.github/workflows/flutter-ios-build.yml
-    with:
-      version: ${{ needs.setup.outputs.version }}
-      version_code: ${{ needs.setup.outputs.version_code }}
-      branch: ${{ needs.setup.outputs.branch }}
-      is_production: ${{ needs.setup.outputs.is_production }}
-    secrets: inherit
+  # deploy-ios:
+  #   needs: setup
+  #   uses: ./.github/workflows/flutter-ios-build.yml
+  #   with:
+  #     version: ${{ needs.setup.outputs.version }}
+  #     version_code: ${{ needs.setup.outputs.version_code }}
+  #     branch: ${{ needs.setup.outputs.branch }}
+  #     is_production: ${{ needs.setup.outputs.is_production }}
+  #   secrets: inherit
 
-  create-release:
-    needs: [setup, deploy-android, deploy-ios]
-    if: needs.setup.outputs.is_production == 'true'
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ needs.setup.outputs.version }}
-          release_name: 'Release v${{ needs.setup.outputs.version }}'
-          body: |
-            ## 🚀 Flutter Release v${{ needs.setup.outputs.version }}
-            - **Android:** ✅ Google Play Store
-            - **iOS:** ✅ App Store
+  # create-release:
+  #   needs: [setup, deploy-android, deploy-ios]
+  #   if: needs.setup.outputs.is_production == 'true'
+  #   runs-on: ubuntu-latest
+  #   environment: production
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #     - name: Create GitHub Release
+  #       uses: actions/create-release@v1
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       with:
+  #         tag_name: v${{ needs.setup.outputs.version }}
+  #         release_name: 'Release v${{ needs.setup.outputs.version }}'
+  #         body: |
+  #           ## 🚀 Flutter Release v${{ needs.setup.outputs.version }}
+  #           - **Android:** ✅ Google Play Store
+  #           - **iOS:** ✅ App Store
