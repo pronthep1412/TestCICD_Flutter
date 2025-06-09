@@ -1,4 +1,4 @@
-# cd.yml - Flutter Continuous Deployment with Build Artifacts Sharing
+# cd.yml - Flutter Continuous Deployment with FIXED Build Artifacts Sharing
 name: Flutter Continuous Deployment
 
 on:
@@ -51,9 +51,12 @@ jobs:
             ${{ runner.os }}-flutter-deps-
 
       - name: Cache Debug Info
+        id: cache-info
         run: |
           echo "🔍 Cache Debug Information:"
-          echo "- Cache Key: ${{ runner.os }}-flutter-deps-${{ hashFiles('pubspec.lock') }}"
+          CACHE_KEY="${{ runner.os }}-flutter-deps-${{ hashFiles('pubspec.lock') }}"
+          echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "- Cache Key: $CACHE_KEY"
           echo "- Cache Hit: ${{ steps.cache-deps.outputs.cache-hit }}"
           echo "- Cache Primary Key: ${{ steps.cache-deps.outputs.cache-primary-key }}"
           echo "- Cache Matched Key: ${{ steps.cache-deps.outputs.cache-matched-key }}"
@@ -162,38 +165,86 @@ jobs:
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "Generated version: $VERSION (code: $VERSION_CODE)"
 
-      # 🆕 Create Flutter build artifacts for sharing
+      # 🆕 FIXED: Create Flutter build artifacts for sharing with enhanced verification
       - name: Create Flutter Build Artifacts for Sharing
         run: |
           echo "📦 Creating Flutter build artifacts for deployment..."
           
-          # Android artifacts
+          # Create directories
           mkdir -p artifacts/android
-          flutter build appbundle --release --build-name="${{ steps.version.outputs.version }}" --build-number="${{ steps.version.outputs.version_code }}"
-          cp build/app/outputs/bundle/release/app-release.aab artifacts/android/
-          
-          # Also create APK for testing
-          flutter build apk --release --build-name="${{ steps.version.outputs.version }}" --build-number="${{ steps.version.outputs.version_code }}"
-          cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
-          
-          # iOS artifacts (skip on Linux)
           mkdir -p artifacts/ios
+          
+          # Update pubspec.yaml version first
+          sed -i "s/^version: .*/version: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}/" pubspec.yaml
+          echo "✅ Updated pubspec.yaml version to: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}"
+          
+          # Android artifacts - Build AAB first
+          echo "🔨 Building Android AAB..."
+          flutter build appbundle --release \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number="${{ steps.version.outputs.version_code }}" \
+            --verbose
+          
+          # Verify AAB exists and copy
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            cp build/app/outputs/bundle/release/app-release.aab artifacts/android/
+            aab_size=$(ls -lh artifacts/android/app-release.aab | awk '{print $5}')
+            echo "✅ AAB created and copied: $aab_size"
+          else
+            echo "❌ AAB build failed!"
+            exit 1
+          fi
+          
+          # Build APK for testing
+          echo "🔨 Building Android APK..."
+          flutter build apk --release \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number="${{ steps.version.outputs.version_code }}"
+          
+          # Verify APK exists and copy
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
+            apk_size=$(ls -lh artifacts/android/app-release.apk | awk '{print $5}')
+            echo "✅ APK created and copied: $apk_size"
+          else
+            echo "⚠️ APK build failed, but continuing with AAB"
+          fi
+          
+          # iOS artifacts (skip on Linux but create placeholder)
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            flutter build ios --release --no-codesign --build-name="${{ steps.version.outputs.version }}" --build-number="${{ steps.version.outputs.version_code }}"
+            echo "🔨 Building iOS..."
+            flutter build ios --release --no-codesign \
+              --build-name="${{ steps.version.outputs.version }}" \
+              --build-number="${{ steps.version.outputs.version_code }}"
             cp -r build/ios/iphoneos/Runner.app artifacts/ios/
           else
             echo "iOS build skipped on Linux runner" > artifacts/ios/README.txt
           fi
           
+          # Final verification
+          echo "🔍 Final artifact verification:"
+          echo "Android artifacts:"
+          ls -la artifacts/android/
+          if [ -f "artifacts/android/app-release.aab" ]; then
+            echo "✅ AAB: $(ls -lh artifacts/android/app-release.aab | awk '{print $5}')"
+          fi
+          if [ -f "artifacts/android/app-release.apk" ]; then
+            echo "✅ APK: $(ls -lh artifacts/android/app-release.apk | awk '{print $5}')"
+          fi
+          
+          echo "iOS artifacts:"
+          ls -la artifacts/ios/
+          
           echo "✅ Flutter build artifacts created successfully"
 
-      # 🆕 Upload artifacts for builds
+      # 🆕 Upload artifacts for builds with enhanced verification
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: cd-flutter-android-artifacts-${{ github.run_number }}
           path: artifacts/android/
           retention-days: 1
+          if-no-files-found: error
 
       - name: Upload iOS Artifacts
         uses: actions/upload-artifact@v4
@@ -201,6 +252,7 @@ jobs:
           name: cd-flutter-ios-artifacts-${{ github.run_number }}
           path: artifacts/ios/
           retention-days: 1
+          if-no-files-found: warn
 
       # 🆕 Coverage and test reports
       - name: Upload Coverage Reports
@@ -212,8 +264,9 @@ jobs:
             coverage/
             test/
           retention-days: 7
+          if-no-files-found: warn
 
-      # 🆕 Build summary
+      # 🆕 Enhanced build summary with artifact info
       - name: Setup Summary
         run: |
           echo "## 🚀 Flutter Continuous Deployment - Setup Phase" >> $GITHUB_STEP_SUMMARY
@@ -228,6 +281,16 @@ jobs:
           echo "- Code quality checks passed" >> $GITHUB_STEP_SUMMARY
           echo "- Unit/Widget tests completed" >> $GITHUB_STEP_SUMMARY
           echo "- Flutter build artifacts created and uploaded" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          if [ -f "artifacts/android/app-release.aab" ]; then
+            aab_size=$(ls -lh artifacts/android/app-release.aab | awk '{print $5}')
+            echo "- **Android AAB:** $aab_size" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f "artifacts/android/app-release.apk" ]; then
+            apk_size=$(ls -lh artifacts/android/app-release.apk | awk '{print $5}')
+            echo "- **Android APK:** $apk_size" >> $GITHUB_STEP_SUMMARY
+          fi
 
   # 🆕 Build analysis for Flutter
   build-analysis:
@@ -316,18 +379,18 @@ jobs:
     secrets: inherit
 
   # iOS deployment with optimization
-  deploy-ios:
-    needs: setup-test-and-prepare
-    uses: ./.github/workflows/flutter-ios-build.yml
-    with:
-      environment: 'release'
-      publish: true
-      version: ${{ needs.setup-test-and-prepare.outputs.version }}
-      version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
-      branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
-      cache_key: ${{ needs.setup-test-and-prepare.outputs.cache_key }}
-      build_artifacts: cd-flutter-ios-artifacts-${{ github.run_number }}
-    secrets: inherit
+  # deploy-ios:
+  #   needs: setup-test-and-prepare
+  #   uses: ./.github/workflows/flutter-ios-build.yml
+  #   with:
+  #     environment: 'release'
+  #     publish: true
+  #     version: ${{ needs.setup-test-and-prepare.outputs.version }}
+  #     version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
+  #     branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
+  #     cache_key: ${{ needs.setup-test-and-prepare.outputs.cache_key }}
+  #     build_artifacts: cd-flutter-ios-artifacts-${{ github.run_number }}
+  #   secrets: inherit
 
   # Production deployment with manual approval
   finalize-production-release:

@@ -1,4 +1,4 @@
-# android/fastlane/Fastfile - Flutter Android version management
+# android/fastlane/Fastfile - Flutter Android version management (FIXED)
 default_platform(:android)
 
 platform :android do
@@ -8,7 +8,66 @@ platform :android do
     auto_update_version if ENV['GITHUB_RUN_NUMBER']
   end
 
-  # ✨ Fixed: Auto version management with proper Flutter version handling
+  # ✨ FIXED: Enhanced path resolution and debugging
+  private_lane :get_aab_path do
+    # Get the absolute path to avoid working directory issues
+    project_root = File.expand_path('../..', __dir__)
+    aab_relative_path = "build/app/outputs/bundle/release/app-release.aab"
+    aab_path = File.join(project_root, aab_relative_path)
+    
+    UI.message("🔍 Path Resolution Debug:")
+    UI.message("   Current Dir: #{Dir.pwd}")
+    UI.message("   Project Root: #{project_root}")
+    UI.message("   AAB Relative: #{aab_relative_path}")
+    UI.message("   AAB Absolute: #{aab_path}")
+    
+    return aab_path
+  end
+
+  # ✨ FIXED: Better file verification with detailed logging
+  private_lane :verify_aab_exists do
+    aab_path = get_aab_path
+    
+    UI.message("🔍 AAB Verification:")
+    UI.message("   Checking: #{aab_path}")
+    
+    if File.exist?(aab_path)
+      file_size = File.size(aab_path)
+      file_size_mb = (file_size / 1024.0 / 1024.0).round(2)
+      
+      if file_size > 0
+        UI.success("✅ AAB found and valid!")
+        UI.success("   Size: #{file_size_mb} MB (#{file_size} bytes)")
+        UI.success("   Path: #{aab_path}")
+        return true
+      else
+        UI.error("❌ AAB file exists but is empty!")
+        return false
+      end
+    else
+      UI.error("❌ AAB file not found!")
+      
+      # Enhanced debugging - search for AAB files
+      UI.message("🔍 Searching for AAB files in project:")
+      project_root = File.expand_path('../..', __dir__)
+      
+      Find.find(project_root) do |path|
+        if path =~ /\.aab$/
+          UI.message("   Found AAB: #{path}")
+          if File.exist?(path)
+            size_mb = (File.size(path) / 1024.0 / 1024.0).round(2)
+            UI.message("   Size: #{size_mb} MB")
+          end
+        end
+      rescue => e
+        # Skip permission denied errors
+      end
+      
+      return false
+    end
+  end
+
+  # ✨ FIXED: Auto version management with proper Flutter version handling
   private_lane :auto_update_version do
     begin
       # ดึง version จาก pubspec.yaml
@@ -51,10 +110,31 @@ platform :android do
       
       version_code = base + run_number
       
-      # อัพเดท Android version โดยใช้ Flutter command
+      UI.success("✅ Version Information:")
+      UI.success("   Version Name: #{new_version}")
+      UI.success("   Version Code: #{version_code}")
+      UI.success("   Branch: #{branch}")
+      UI.success("   Run Number: #{run_number}")
+      
+      # ✨ FIXED: Check if AAB already exists before building
+      if verify_aab_exists
+        UI.success("✅ AAB already exists, skipping build in auto_update_version")
+        return
+      end
+      
+      # Only build if AAB doesn't exist
+      UI.message("🔄 Building Flutter AAB with version update...")
+      
       sh("cd .. && flutter build appbundle --build-name=#{new_version} --build-number=#{version_code} --release --no-tree-shake-icons") do |status|
         if status.success?
           UI.success("✅ Flutter build completed with version update")
+          
+          # Verify the build was successful
+          if verify_aab_exists
+            UI.success("✅ AAB verified after build")
+          else
+            UI.error("❌ AAB not found after successful build - this is unexpected!")
+          end
         else
           UI.error("❌ Flutter build failed, falling back to gradle version update")
           
@@ -64,11 +144,6 @@ platform :android do
           sh("sed -i 's/versionCode [0-9]*/versionCode #{version_code}/' #{gradle_file}")
         end
       end
-      
-      UI.success("✅ Auto updated Flutter Android version:")
-      UI.success("   versionName: #{new_version}")
-      UI.success("   versionCode: #{version_code}")
-      UI.success("   branch: #{branch}")
       
     rescue => e
       UI.error("❌ Failed to auto update version: #{e.message}")
@@ -178,56 +253,96 @@ platform :android do
     # notify_slack("🎉 Flutter Android Production build deployed with 10% rollout!")
   end
 
+  # ✨ FIXED: Enhanced build_only lane with better verification
   lane :build_only do
     UI.message("🔨 Building Flutter release AAB...")
     
-    # Check if we already have a built AAB from the main workflow
-    aab_path = "../build/app/outputs/bundle/release/app-release.aab"
-    if File.exist?(aab_path)
+    # Check if we already have a built AAB
+    if verify_aab_exists
       UI.success("✅ Found existing Flutter AAB, skipping build step")
-    else
-      UI.message("🔄 Building fresh Flutter AAB...")
-      sh("cd .. && flutter build appbundle --release")
+      return
     end
     
-    if File.exist?(aab_path)
-      file_size = (File.size(aab_path) / 1024.0 / 1024.0).round(2)
-      UI.success("✅ Flutter build completed successfully! AAB size: #{file_size} MB")
+    UI.message("🔄 Building fresh Flutter AAB...")
+    sh("cd .. && flutter build appbundle --release")
+    
+    # Verify the build
+    if verify_aab_exists
+      UI.success("✅ Flutter build completed successfully!")
     else
       UI.error("❌ Flutter AAB not found after build!")
+      raise "AAB build verification failed"
     end
   end
 
-  # 🔧 Private lanes
+  # 🔧 FIXED: Enhanced private lane with better error handling
   private_lane :build_and_deploy do |options|
-    # Ensure we have a built AAB
-    aab_path = "../build/app/outputs/bundle/release/app-release.aab"
+    UI.message("🚀 Starting build and deploy process...")
+    UI.message("   Track: #{options[:track]}")
+    UI.message("   Release Status: #{options[:release_status]}")
+    UI.message("   Rollout: #{options[:rollout] || 'N/A'}")
     
-    if !File.exist?(aab_path)
-      UI.message("🔄 Building Flutter AAB...")
-      sh("cd .. && flutter build appbundle --release")
+    # ✨ FIXED: Smart AAB handling - don't build if it already exists
+    if verify_aab_exists
+      UI.success("✅ Using existing AAB file")
+    else
+      UI.message("🔄 AAB not found, building Flutter AAB...")
+      
+      begin
+        sh("cd .. && flutter build appbundle --release")
+        
+        # Verify the build was successful
+        if verify_aab_exists
+          UI.success("✅ Flutter AAB built successfully")
+        else
+          UI.error("❌ AAB build failed - file not found after build")
+          raise "AAB build verification failed"
+        end
+      rescue => e
+        UI.error("❌ Flutter build failed: #{e.message}")
+        raise "Flutter build failed: #{e.message}"
+      end
     end
     
-    if !File.exist?(aab_path)
-      UI.error("❌ Flutter AAB not found! Cannot proceed with deployment.")
-      raise "AAB file not found"
+    # ✨ FIXED: Use the path helper for consistent path resolution
+    aab_path = get_aab_path
+    
+    # Final verification before upload
+    unless File.exist?(aab_path)
+      UI.error("❌ AAB file not found at final check: #{aab_path}")
+      UI.error("This should not happen - please check the build process")
+      raise "AAB file not found before upload"
     end
+    
+    # Get file info for logging
+    file_size = File.size(aab_path)
+    file_size_mb = (file_size / 1024.0 / 1024.0).round(2)
+    
+    UI.success("✅ AAB ready for upload:")
+    UI.success("   Path: #{aab_path}")
+    UI.success("   Size: #{file_size_mb} MB")
     
     # Upload to Play Store
-    upload_to_play_store(
-      track: options[:track],
-      json_key: "google-play-key.json",
-      aab: aab_path,
-      release_status: options[:release_status],
-      rollout: options[:rollout],
-      package_name: "test.cicd.appibc",  # Update this to your Flutter app's package name
-      skip_upload_metadata: true,
-      skip_upload_images: true,
-      skip_upload_screenshots: true,
-      timeout: 300
-    )
-    
-    UI.success("✅ Successfully uploaded Flutter AAB to #{options[:track]} track!")
+    begin
+      upload_to_play_store(
+        track: options[:track],
+        json_key: "google-play-key.json",
+        aab: aab_path,
+        release_status: options[:release_status],
+        rollout: options[:rollout],
+        package_name: "test.cicd.appibc",  # Update this to your Flutter app's package name
+        skip_upload_metadata: true,
+        skip_upload_images: true,
+        skip_upload_screenshots: true,
+        timeout: 300
+      )
+      
+      UI.success("✅ Successfully uploaded Flutter AAB to #{options[:track]} track!")
+      
+    rescue => e
+      UI.error("❌ Upload to Play Store failed: #{e.message}")
+      raise "Play Store upload failed: #{e.message}"
+    end
   end
 
   # 🆕 Flutter specific lanes
@@ -263,6 +378,38 @@ platform :android do
     end
   end
 
+  # ✨ FIXED: Enhanced debugging lane
+  lane :debug_paths do
+    UI.message("🔍 Path Debugging Information:")
+    UI.message("   Current Directory: #{Dir.pwd}")
+    UI.message("   Fastfile Directory: #{__dir__}")
+    
+    project_root = File.expand_path('../..', __dir__)
+    UI.message("   Project Root: #{project_root}")
+    
+    aab_path = get_aab_path
+    UI.message("   Expected AAB Path: #{aab_path}")
+    UI.message("   AAB Exists: #{File.exist?(aab_path)}")
+    
+    if File.exist?(aab_path)
+      file_size = (File.size(aab_path) / 1024.0 / 1024.0).round(2)
+      UI.message("   AAB Size: #{file_size} MB")
+    end
+    
+    # List build directory contents
+    build_dir = File.join(project_root, "build")
+    if Dir.exist?(build_dir)
+      UI.message("   Build Directory Contents:")
+      Dir.glob(File.join(build_dir, "**", "*")).each do |item|
+        if File.file?(item)
+          UI.message("     #{item}")
+        end
+      end
+    else
+      UI.message("   Build Directory: Not found")
+    end
+  end
+
   private_lane :notify_slack do |message|
     return unless ENV["SLACK_URL"]
     
@@ -279,10 +426,26 @@ platform :android do
     end
   end
 
-  # Error handling
+  # ✨ Enhanced error handling
   error do |lane, exception|
     error_message = "❌ Flutter Android deployment failed in lane '#{lane}': #{exception.message}"
     UI.error(error_message)
+    
+    # Enhanced debugging on error
+    UI.error("🔍 Error Debug Information:")
+    UI.error("   Current Directory: #{Dir.pwd}")
+    UI.error("   Exception Class: #{exception.class}")
+    UI.error("   Stack Trace: #{exception.backtrace.first(5).join('\n   ')}")
+    
+    # Try to provide helpful information
+    begin
+      aab_path = get_aab_path
+      UI.error("   Expected AAB Path: #{aab_path}")
+      UI.error("   AAB Exists: #{File.exist?(aab_path)}")
+    rescue => debug_error
+      UI.error("   Could not get AAB debug info: #{debug_error.message}")
+    end
+    
     # notify_slack(error_message) if defined?(notify_slack)
     raise exception
   end

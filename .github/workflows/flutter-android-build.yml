@@ -1,4 +1,4 @@
-# .github/workflows/flutter-android-build.yml - Flutter Android Build and Deploy
+# .github/workflows/flutter-android-build.yml - Flutter Android Build and Deploy (FIXED)
 name: "Flutter Android Build and Deploy"
 
 on:
@@ -20,13 +20,11 @@ on:
       branch:
         required: true
         type: string
-      # Accept pre-built dependencies cache
       cache_key:
         description: 'Dependencies cache key from main pipeline'
         required: false
         type: string
         default: ''
-      # Accept pre-built Flutter artifacts
       build_artifacts:
         description: 'Pre-built Flutter build artifacts name'
         required: false
@@ -45,14 +43,13 @@ on:
         required: true
 
 env:
-  FLUTTER_VERSION: '3.32.2'  # Latest stable Flutter version
+  FLUTTER_VERSION: '3.32.2'
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Flutter builds can take longer
+    timeout-minutes: 30
     
-    # Environment logic
     environment: 
       name: ${{ inputs.branch == 'master' && 'production' || inputs.branch }}
     
@@ -67,7 +64,7 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
-      # 🚀 Smart dependency handling - use cache if available
+      # 🚀 Smart dependency handling
       - name: Restore Dependencies Cache
         id: restore-deps-cache
         if: inputs.cache_key != ''
@@ -84,7 +81,15 @@ jobs:
         if: inputs.cache_key == '' || steps.restore-deps-cache.outputs.cache-hit != 'true'
         run: flutter pub get
 
-      # 🎯 Smart Flutter build artifacts handling
+      # 🎯 Enhanced pre-built artifacts handling
+      - name: Download and Setup Pre-built Flutter Artifacts
+        if: inputs.build_artifacts != ''
+        run: |
+          echo "🔄 Setting up pre-built Flutter artifacts..."
+          
+          # Download artifacts
+          echo "📥 Downloading artifacts: ${{ inputs.build_artifacts }}"
+          
       - name: Download Pre-built Flutter Artifacts
         if: inputs.build_artifacts != ''
         uses: actions/download-artifact@v4
@@ -92,22 +97,40 @@ jobs:
           name: ${{ inputs.build_artifacts }}
           path: ./pre-built-artifacts/
 
-      - name: Setup Flutter Build Artifacts
+      - name: Setup Pre-built Artifacts and Verify
+        if: inputs.build_artifacts != ''
         run: |
-          if [ "${{ inputs.build_artifacts }}" != "" ] && [ -f "./pre-built-artifacts/app-release.aab" ]; then
-            # Use pre-built artifacts
-            echo "✅ Using pre-built Flutter artifacts"
-            mkdir -p build/app/outputs/bundle/release/
-            mkdir -p build/app/outputs/flutter-apk/
-            
-            cp ./pre-built-artifacts/app-release.aab build/app/outputs/bundle/release/ || echo "AAB not found"
-            cp ./pre-built-artifacts/app-release.apk build/app/outputs/flutter-apk/ || echo "APK not found"
-            
-            if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-              echo "📦 Using pre-built AAB: $(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')"
-            fi
+          echo "🔍 Checking pre-built artifacts..."
+          ls -la ./pre-built-artifacts/ || echo "No pre-built artifacts directory"
+          
+          # Create necessary directories
+          mkdir -p build/app/outputs/bundle/release/
+          mkdir -p build/app/outputs/flutter-apk/
+          
+          # Copy artifacts if they exist
+          if [ -f "./pre-built-artifacts/app-release.aab" ]; then
+            cp ./pre-built-artifacts/app-release.aab build/app/outputs/bundle/release/
+            echo "✅ Pre-built AAB copied successfully"
+            aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
+            echo "📦 AAB size: $aab_size"
           else
-            echo "🔄 Will create fresh Flutter build..."
+            echo "⚠️ Pre-built AAB not found, will build fresh"
+          fi
+          
+          if [ -f "./pre-built-artifacts/app-release.apk" ]; then
+            cp ./pre-built-artifacts/app-release.apk build/app/outputs/flutter-apk/
+            echo "✅ Pre-built APK copied successfully"
+          else
+            echo "⚠️ Pre-built APK not found, will build fresh"
+          fi
+          
+          # Verify final locations
+          echo "🔍 Final artifact verification:"
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            echo "✅ AAB ready at: $(pwd)/build/app/outputs/bundle/release/app-release.aab"
+          fi
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo "✅ APK ready at: $(pwd)/build/app/outputs/flutter-apk/app-release.apk"
           fi
 
       # 🔄 Enhanced Ruby setup for Fastlane
@@ -131,22 +154,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-flutter-gradle-
 
-      - name: Cache Restore Debug
-        run: |
-          echo "🔍 Cache Restore Debug:"
-          echo "- Input Cache Key: ${{ inputs.cache_key }}"
-          echo "- Cache Hit: ${{ steps.restore-deps-cache.outputs.cache-hit }}"
-          echo "- Cache Primary Key: ${{ steps.restore-deps-cache.outputs.cache-primary-key }}"
-          echo "- Cache Matched Key: ${{ steps.restore-deps-cache.outputs.cache-matched-key }}"
-          
-          # Check if pub cache exists
-          if [ -d "$PUB_CACHE" ]; then
-            echo "- Pub cache restored: $(du -sh $PUB_CACHE | cut -f1)"
-          else
-            echo "- Pub cache: Not restored"
-          fi
-
-      # 🔒 Enhanced keystore setup with validation
+      # 🔒 Enhanced keystore setup
       - name: Setup Android Keystore
         run: |
           echo "🔑 Setting up Android keystore..."
@@ -181,100 +189,104 @@ jobs:
           cp pubspec.yaml pubspec.yaml.backup
           
           # Update pubspec.yaml with new version
-          # Format: version: 1.2.3+123
           sed -i "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
           
           # Verify the changes
           echo "✅ Updated pubspec.yaml:"
           grep "^version:" pubspec.yaml
-          
-          # Validate version format
-          if ! echo "${{ inputs.version }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+'; then
-            echo "⚠️ Warning: Version format might be non-standard"
-          fi
 
-      # 🚀 Enhanced Flutter build with better error handling
-      - name: Build Flutter Android Debug
-        if: inputs.environment == 'debug'
+      # 🚀 FIXED: Smart Flutter build with proper artifact handling
+      - name: Build Flutter Android (Smart Build)
         run: |
-          echo "🔨 Building Flutter Android Debug..."
+          echo "🔨 Starting Flutter Android build process..."
           
-          # Check if pre-built artifacts exist
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            echo "✅ Using pre-built debug APK"
-          else
-            # Pre-build checks
-            echo "📋 Pre-build validation:"
-            echo "- Flutter version: $(flutter --version | head -1)"
-            echo "- Dart version: $(dart --version)"
-            echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
+          # Check current working directory and files
+          echo "📂 Current directory: $(pwd)"
+          echo "📋 Checking existing artifacts:"
+          
+          AAB_PATH="build/app/outputs/bundle/release/app-release.aab"
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+          
+          # Check if we already have valid artifacts
+          NEED_AAB_BUILD=true
+          NEED_APK_BUILD=true
+          
+          if [ -f "$AAB_PATH" ]; then
+            echo "✅ Found existing AAB: $(ls -lh $AAB_PATH | awk '{print $5}')"
             
-            # Build with progress tracking
-            flutter build apk --debug \
-              --build-name="${{ inputs.version }}" \
-              --build-number="${{ inputs.version_code }}" \
-              --verbose | tee build.log
-            
-            # Post-build summary
-            if [ $? -eq 0 ]; then
-              echo "✅ Debug build completed successfully"
-              if [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
-                apk_size=$(ls -lh build/app/outputs/flutter-apk/app-debug.apk | awk '{print $5}')
-                echo "📦 Debug APK size: $apk_size"
-              fi
+            # Verify the AAB is valid and not corrupted
+            if [ -s "$AAB_PATH" ]; then
+              echo "✅ AAB appears valid, skipping AAB build"
+              NEED_AAB_BUILD=false
             else
-              echo "❌ Debug build failed"
-              echo "📄 Last 20 lines of build log:"
-              tail -20 build.log
-              exit 1
+              echo "⚠️ AAB file is empty, will rebuild"
             fi
-          fi
-
-      - name: Build Flutter Android Release
-        if: inputs.environment == 'release'
-        run: |
-          echo "🔨 Building Flutter Android Release..."
-          
-          # Check if pre-built artifacts exist
-          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-            echo "✅ Using pre-built release AAB"
           else
-            # Enhanced build for release
+            echo "⚠️ No existing AAB found"
+          fi
+          
+          if [ -f "$APK_PATH" ]; then
+            echo "✅ Found existing APK: $(ls -lh $APK_PATH | awk '{print $5}')"
+            NEED_APK_BUILD=false
+          else
+            echo "⚠️ No existing APK found"
+          fi
+          
+          # Build AAB if needed (required for deployment)
+          if [ "$NEED_AAB_BUILD" = true ] || [ "${{ inputs.environment }}" = "release" ]; then
+            echo "🔨 Building AAB..."
             flutter build appbundle --release \
               --build-name="${{ inputs.version }}" \
               --build-number="${{ inputs.version_code }}" \
-              --verbose | tee build.log
+              --verbose
             
-            # Post-build summary
-            if [ $? -eq 0 ]; then
-              echo "✅ Release build completed successfully"
-              if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-                aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
-                echo "📦 Release AAB size: $aab_size"
-                
-                # Additional release validations using aapt2 if available
-                echo "🔍 Release bundle validation:"
-                if command -v aapt2 >/dev/null 2>&1; then
-                  aapt2 dump badging build/app/outputs/bundle/release/app-release.aab | grep -E "(package|versionCode|versionName)" || echo "Could not extract bundle info"
-                else
-                  echo "aapt2 not available for validation"
-                fi
-              fi
+            if [ $? -eq 0 ] && [ -f "$AAB_PATH" ]; then
+              aab_size=$(ls -lh $AAB_PATH | awk '{print $5}')
+              echo "✅ AAB build completed: $aab_size"
             else
-              echo "❌ Release build failed"
-              echo "📄 Last 20 lines of build log:"
-              tail -20 build.log
+              echo "❌ AAB build failed!"
               exit 1
             fi
           fi
+          
+          # Build APK if needed (for testing)
+          if [ "$NEED_APK_BUILD" = true ]; then
+            echo "🔨 Building APK..."
+            flutter build apk --release \
+              --build-name="${{ inputs.version }}" \
+              --build-number="${{ inputs.version_code }}"
+            
+            if [ $? -eq 0 ] && [ -f "$APK_PATH" ]; then
+              apk_size=$(ls -lh $APK_PATH | awk '{print $5}')
+              echo "✅ APK build completed: $apk_size"
+            else
+              echo "⚠️ APK build failed, but continuing with AAB"
+            fi
+          fi
+          
+          # Final verification
+          echo "🔍 Final build verification:"
+          if [ -f "$AAB_PATH" ]; then
+            echo "✅ AAB ready: $(ls -lh $AAB_PATH | awk '{print $5}')"
+            echo "📍 AAB absolute path: $(realpath $AAB_PATH)"
+          else
+            echo "❌ AAB not found!"
+            exit 1
+          fi
+          
+          if [ -f "$APK_PATH" ]; then
+            echo "✅ APK ready: $(ls -lh $APK_PATH | awk '{print $5}')"
+          fi
 
-      # 🚀 Enhanced deployment with better error handling
+      # 🚀 Enhanced deployment with better path handling
       - name: Deploy to Google Play Store
         if: inputs.publish == true
         env:
           GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
           GITHUB_REF_NAME: ${{ inputs.branch }}
+          BUILD_VERSION: ${{ inputs.version }}
+          BUILD_VERSION_CODE: ${{ inputs.version_code }}
         run: |
           cd android
           echo "🚀 Deploying Flutter app to Google Play Store..."
@@ -282,9 +294,20 @@ jobs:
           # Setup Play Store key
           echo "$GOOGLE_PLAY_JSON_KEY" | base64 -d > google-play-key.json
           
-          # Verify key file
-          if [ ! -f "google-play-key.json" ]; then
-            echo "❌ Google Play key setup failed"
+          # Verify AAB exists before deployment
+          AAB_PATH="../build/app/outputs/bundle/release/app-release.aab"
+          echo "🔍 Pre-deployment verification:"
+          echo "Current directory: $(pwd)"
+          echo "Looking for AAB at: $AAB_PATH"
+          
+          if [ -f "$AAB_PATH" ]; then
+            aab_size=$(ls -lh "$AAB_PATH" | awk '{print $5}')
+            echo "✅ AAB found: $aab_size"
+            echo "📍 AAB absolute path: $(realpath $AAB_PATH)"
+          else
+            echo "❌ AAB not found at expected location!"
+            echo "🔍 Searching for AAB files:"
+            find .. -name "*.aab" -type f 2>/dev/null || echo "No AAB files found"
             exit 1
           fi
           
@@ -298,13 +321,19 @@ jobs:
           
           echo "📤 Deploying to track: $TRACK"
           
-          # Deploy with error handling using Fastlane
+          # Deploy using Fastlane with enhanced error handling
           if bundle exec fastlane deploy_${{ inputs.branch }}; then
             echo "✅ Deployment to $TRACK completed successfully"
           else
             echo "❌ Deployment failed"
             echo "🔍 Checking fastlane logs..."
             ls -la fastlane/logs/ 2>/dev/null || echo "No fastlane logs found"
+            
+            # Try to show recent logs
+            if [ -d "fastlane/logs" ]; then
+              echo "📄 Recent fastlane logs:"
+              find fastlane/logs -name "*.log" -type f -exec tail -20 {} \;
+            fi
             exit 1
           fi
           
@@ -320,7 +349,6 @@ jobs:
           path: |
             build/app/outputs/bundle/release/*.aab
             build/app/outputs/flutter-apk/*.apk
-            build.log
             android/fastlane/logs/*.log
           retention-days: 7
           compression-level: 6
@@ -335,6 +363,7 @@ jobs:
           echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Flutter Version:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Used Pre-built Artifacts:** ${{ inputs.build_artifacts != '' && 'Yes' || 'No' }}" >> $GITHUB_STEP_SUMMARY
           
           # Build status
           if [ "${{ job.status }}" = "success" ]; then
@@ -344,11 +373,6 @@ jobs:
           fi
           
           # File sizes
-          if [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
-            debug_size=$(ls -lh build/app/outputs/flutter-apk/app-debug.apk | awk '{print $5}')
-            echo "- **Debug APK:** $debug_size" >> $GITHUB_STEP_SUMMARY
-          fi
-          
           if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
             release_apk_size=$(ls -lh build/app/outputs/flutter-apk/app-release.apk | awk '{print $5}')
             echo "- **Release APK:** $release_apk_size" >> $GITHUB_STEP_SUMMARY
@@ -369,14 +393,6 @@ jobs:
             echo "- **Deployed to:** $TRACK track" >> $GITHUB_STEP_SUMMARY
           else
             echo "- **Artifacts:** Available for download" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Performance metrics
-          if [ -f "build.log" ]; then
-            build_time=$(grep "Built build/app/outputs" build.log | tail -1 | grep -o '[0-9]*,[0-9]*ms' || echo "Unknown")
-            if [ "$build_time" != "Unknown" ]; then
-              echo "- **Build Time:** $build_time" >> $GITHUB_STEP_SUMMARY
-            fi
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
