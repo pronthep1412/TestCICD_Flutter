@@ -175,24 +175,31 @@ jobs:
       - name: Create Flutter Build Artifacts for Sharing
         if: steps.changes.outputs.should_build == 'true'
         run: |
-          echo "📦 Creating Flutter build artifacts..."
+          echo "📦 Creating Flutter DEBUG artifacts for testing..."
           
-          # Create Android AAB
           mkdir -p artifacts/android
-          # Create Android APK for testing
-          flutter build apk --release --build-name="${{ steps.version.outputs.version }}" --build-number=99
-          cp build/app/outputs/flutter-apk/app-release.apk artifacts/android/
           
-          # Create iOS Archive (skip on Linux)
-          mkdir -p artifacts/ios
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            flutter build ios --release --no-codesign --build-name="${{ steps.version.outputs.version }}" --build-number=99
-            cp -r build/ios/iphoneos/Runner.app artifacts/ios/
-          else
-            echo "iOS build skipped on Linux runner" > artifacts/ios/README.txt
+          # ✅ ใช้ debug build (ไม่ต้อง keystore)
+          flutter build apk --debug \
+            --build-name="${{ steps.version.outputs.version }}" \
+            --build-number=99
+          
+          # Copy debug artifacts  
+          if [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
+            cp build/app/outputs/flutter-apk/app-debug.apk artifacts/android/
+            echo "✅ Debug APK created for testing"
           fi
           
-          echo "✅ Flutter build artifacts created successfully"
+          # iOS debug (skip on Linux)
+          mkdir -p artifacts/ios
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            flutter build ios --debug --no-codesign \
+              --build-name="${{ steps.version.outputs.version }}" \
+              --build-number=99
+            cp -r build/ios/iphoneos/Runner.app artifacts/ios/
+          else
+            echo "iOS debug build skipped on Linux runner" > artifacts/ios/README.txt
+          fi
 
       # 🆕 Upload build artifacts with SIMPLE names
       - name: Upload Android Artifacts
@@ -292,9 +299,12 @@ jobs:
         run: |
           echo "## 📦 Flutter Build Analysis" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f "./build-check/app-release.apk" ]; then
-            apk_size=$(ls -lh ./build-check/app-release.apk | awk '{print $5}')
-            echo "- **Android APK Size:** $apk_size" >> $GITHUB_STEP_SUMMARY
+          # ✅ หา debug APK สำหรับ CI
+          if [ -f "./build-check/app-debug.apk" ]; then
+            apk_size=$(ls -lh ./build-check/app-debug.apk | awk '{print $5}')
+            echo "- **Android APK Size (Debug):** $apk_size" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Android APK:** Not found" >> $GITHUB_STEP_SUMMARY
           fi
 
   # PR Summary
