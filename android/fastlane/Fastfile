@@ -182,7 +182,7 @@ platform :android do
     UI.message("🔨 Building Flutter release AAB...")
     
     # Check if we already have a built AAB from the main workflow
-    aab_path = "build/app/outputs/bundle/release/app-release.aab"
+    aab_path = "../build/app/outputs/bundle/release/app-release.aab"
     if File.exist?(aab_path)
       UI.success("✅ Found existing Flutter AAB, skipping build step")
     else
@@ -201,7 +201,7 @@ platform :android do
   # 🔧 Private lanes
   private_lane :build_and_deploy do |options|
     # Ensure we have a built AAB
-    aab_path = "build/app/outputs/bundle/release/app-release.aab"
+    aab_path = "../build/app/outputs/bundle/release/app-release.aab"
     
     if !File.exist?(aab_path)
       UI.message("🔄 Building Flutter AAB...")
