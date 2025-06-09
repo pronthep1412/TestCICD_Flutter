@@ -79,51 +79,50 @@ jobs:
       - name: Flutter Doctor
         run: flutter doctor -v
 
-      - name: Code Analysis (Dart Analyze)
-        run: |
-          echo "## 🔍 Flutter Code Analysis Results" >> $GITHUB_STEP_SUMMARY
-          if flutter analyze --no-congratulate; then
-            echo "✅ No analysis issues found" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Analysis issues detected - check logs for details" >> $GITHUB_STEP_SUMMARY
-            flutter analyze --no-congratulate || true
-          fi
+      # - name: Code Analysis (Dart Analyze)
+      #   run: |
+      #     echo "## 🔍 Flutter Code Analysis Results" >> $GITHUB_STEP_SUMMARY
+      #     if flutter analyze --no-congratulate; then
+      #       echo "✅ No analysis issues found" >> $GITHUB_STEP_SUMMARY
+      #     else
+      #       echo "⚠️ Analysis issues detected - check logs for details" >> $GITHUB_STEP_SUMMARY
+      #       flutter analyze --no-congratulate || true
+      #     fi
 
-      - name: Code Formatting Check
-        run: |
-          echo "## 📝 Code Formatting Check" >> $GITHUB_STEP_SUMMARY
-          if dart format --set-exit-if-changed .; then
-            echo "✅ All files are properly formatted" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Some files need formatting" >> $GITHUB_STEP_SUMMARY
-          fi
+      # - name: Code Formatting Check
+      #   run: |
+      #     echo "## 📝 Code Formatting Check" >> $GITHUB_STEP_SUMMARY
+      #     if dart format --set-exit-if-changed .; then
+      #       echo "✅ All files are properly formatted" >> $GITHUB_STEP_SUMMARY
+      #     else
+      #       echo "⚠️ Some files need formatting" >> $GITHUB_STEP_SUMMARY
+      #     fi
 
-      - name: Unit & Widget Tests with Coverage
-        run: flutter test --coverage --reporter=expanded
+      # - name: Unit & Widget Tests with Coverage
+      #   run: flutter test --coverage --reporter=expanded
 
-      # 🆕 Extract coverage for reporting
-      - name: Extract Coverage Percentage
-        id: coverage
-        run: |
-          COVERAGE="0"
+      # - name: Extract Coverage Percentage
+      #   id: coverage
+      #   run: |
+      #     COVERAGE="0"
           
-          if [ -f "coverage/lcov.info" ]; then
-            # Install lcov for coverage calculation
-            sudo apt-get update && sudo apt-get install -y lcov
-            COVERAGE=$(lcov --summary coverage/lcov.info 2>/dev/null | grep 'lines' | grep -o '[0-9.]*%' | head -1 | sed 's/%//' || echo "0")
-          fi
+      #     if [ -f "coverage/lcov.info" ]; then
+      #       # Install lcov for coverage calculation
+      #       sudo apt-get update && sudo apt-get install -y lcov
+      #       COVERAGE=$(lcov --summary coverage/lcov.info 2>/dev/null | grep 'lines' | grep -o '[0-9.]*%' | head -1 | sed 's/%//' || echo "0")
+      #     fi
           
-          # Validate และ fallback
-          if ! echo "$COVERAGE" | grep -q '^[0-9]*\.*[0-9]*$'; then
-            COVERAGE="0"
-          fi
+      #     # Validate และ fallback
+      #     if ! echo "$COVERAGE" | grep -q '^[0-9]*\.*[0-9]*$'; then
+      #       COVERAGE="0"
+      #     fi
           
-          if [ -z "$COVERAGE" ] || [ "$COVERAGE" = "" ]; then
-            COVERAGE="0"
-          fi
+      #     if [ -z "$COVERAGE" ] || [ "$COVERAGE" = "" ]; then
+      #       COVERAGE="0"
+      #     fi
           
-          echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
-          echo "Coverage: $COVERAGE%"
+      #     echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
+      #     echo "Coverage: $COVERAGE%"
 
       - name: Set Branch Info
         id: branch

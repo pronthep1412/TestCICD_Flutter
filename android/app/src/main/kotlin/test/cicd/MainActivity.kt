@@ -1,4 +1,4 @@
-package test.cicd.appibc.testcicd_flutter
+package test.cicd.appibc
 
 import io.flutter.embedding.android.FlutterActivity
 
