@@ -1,15 +1,49 @@
-# .github/workflows/android.yml - Simplified Android Build & Deploy
-name: Flutter Android CI/CD
+# .github/workflows/android-reusable.yml - Reusable Android Workflow
+name: Android Build & Deploy
 
 on:
-  push:
-    branches: [main, develop, staging]
-    paths:
-      - 'lib/**'
-      - 'android/**'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - '.github/workflows/android.yml'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      version_code:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+      is_production:
+        required: false
+        type: string
+        default: 'false'
+    secrets:
+      KEYSTORE_FILE:
+        required: true
+      KEYSTORE_PASSWORD:
+        required: true
+      KEY_ALIAS:
+        required: true
+      KEY_PASSWORD:
+        required: true
+      GOOGLE_PLAY_JSON_KEY:
+        required: true
+  
+  # Manual trigger (ใช้สำหรับ hotfix หรือ emergency deploy)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 1.2.3)'
+        required: true
+        default: '1.0.0'
+      version_code:
+        description: 'Version code (e.g., 123)'
+        required: true
+        default: '1'
+      branch:
+        description: 'Branch name'
+        required: true
+        default: 'develop'
 
 env:
   FLUTTER_VERSION: '3.32.2'
@@ -17,11 +51,9 @@ env:
 jobs:
   build-and-deploy-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    
-    # Environment protection
+    timeout-minutes: 25
     environment: 
-      name: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+      name: ${{ inputs.branch == 'main' && 'production' || inputs.branch }}
     
     steps:
       - name: Checkout
@@ -31,170 +63,46 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
           cache: true
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Cache Flutter Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.PUB_CACHE }}
-            ~/.gradle/wrapper
-            ~/.gradle/caches
-            ~/.android/build-cache
-          key: ${{ runner.os }}-flutter-android-${{ hashFiles('pubspec.lock', 'android/gradle.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-flutter-android-
 
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Generate Version
-        id: version
+      - name: Update Version
         run: |
-          BRANCH_NAME="${{ github.ref_name }}"
-          RUN_NUMBER="${{ github.run_number }}"
-          BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
-          
-          case "$BRANCH_NAME" in
-            "main")
-              VERSION="$BASE_VERSION"
-              VERSION_CODE=$((2000000 + RUN_NUMBER))
-              TRACK="production"
-              ;;
-            "staging")
-              VERSION="$BASE_VERSION-beta.$RUN_NUMBER"
-              VERSION_CODE=$((1500000 + RUN_NUMBER))
-              TRACK="beta"
-              ;;
-            *)
-              VERSION="$BASE_VERSION-alpha.$RUN_NUMBER"
-              VERSION_CODE=$((1000000 + RUN_NUMBER))
-              TRACK="internal"
-              ;;
-          esac
-          
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
-          echo "track=$TRACK" >> $GITHUB_OUTPUT
-          echo "📱 Android Version: $VERSION (code: $VERSION_CODE, track: $TRACK)"
-
-      - name: Update pubspec.yaml Version
-        run: |
-          sed -i "s/^version: .*/version: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}/" pubspec.yaml
-          echo "✅ Updated pubspec.yaml version"
+          sed -i "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
 
       - name: Setup Android Signing
         run: |
-          echo "🔑 Setting up Android signing..."
           echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > android/app/keystore.jks
-          
           cat > android/key.properties << EOF
           storeFile=keystore.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
           EOF
-          
-          echo "✅ Android signing configured"
-
-      - name: Run Tests
-        run: |
-          echo "🧪 Running Android tests..."
-          flutter test
-
-      - name: Analyze Code
-        run: |
-          echo "🔍 Running code analysis..."
-          flutter analyze
 
       - name: Build Android AAB
         run: |
-          echo "🔨 Building Android App Bundle..."
           flutter build appbundle --release \
-            --build-name="${{ steps.version.outputs.version }}" \
-            --build-number="${{ steps.version.outputs.version_code }}"
-          
-          # Verify build
-          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-            aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
-            echo "✅ AAB built successfully: $aab_size"
-          else
-            echo "❌ AAB build failed!"
-            exit 1
-          fi
+            --build-name="${{ inputs.version }}" \
+            --build-number="${{ inputs.version_code }}"
 
-      - name: Build Android APK (for testing)
-        run: |
-          echo "🔨 Building Android APK..."
-          flutter build apk --release \
-            --build-name="${{ steps.version.outputs.version }}" \
-            --build-number="${{ steps.version.outputs.version_code }}"
-
-      - name: Setup Ruby for Fastlane
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
-          bundler-cache: true
-          working-directory: android
-
-      - name: Deploy to Google Play Store
-        env:
-          GOOGLE_PLAY_JSON_KEY: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
+      - name: Deploy to Google Play
         run: |
           cd android
-          echo "🚀 Deploying to Google Play Store..."
+          echo "${{ secrets.GOOGLE_PLAY_JSON_KEY }}" | base64 -d > google-play-key.json
           
-          # Setup credentials
-          echo "$GOOGLE_PLAY_JSON_KEY" | base64 -d > google-play-key.json
+          TRACK="internal"
+          case "${{ inputs.branch }}" in
+            "main") TRACK="production" ;;
+            "staging") TRACK="beta" ;;
+          esac
           
-          # Deploy using Fastlane
           bundle exec fastlane android deploy \
-            track:"${{ steps.version.outputs.track }}" \
+            track:$TRACK \
             aab:"../build/app/outputs/bundle/release/app-release.aab" \
-            json_key:"google-play-key.json" \
-            version_name:"${{ steps.version.outputs.version }}" \
-            version_code:"${{ steps.version.outputs.version_code }}"
-          
-          echo "✅ Deployed to ${{ steps.version.outputs.track }} track"
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-release-${{ steps.version.outputs.version }}-${{ github.run_number }}
-          path: |
-            build/app/outputs/bundle/release/*.aab
-            build/app/outputs/flutter-apk/*.apk
-          retention-days: 30
-
-      - name: Android Build Summary
-        run: |
-          echo "## 🤖 Android Build & Deploy Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version Code:** ${{ steps.version.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Track:** ${{ steps.version.outputs.track }}" >> $GITHUB_STEP_SUMMARY
-          
-          # File sizes
-          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-            aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
-            echo "- **AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            apk_size=$(ls -lh build/app/outputs/flutter-apk/app-release.apk | awk '{print $5}')
-            echo "- **APK Size:** $apk_size" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "- **Status:** ✅ Build and Deploy Successful" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "*Android deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+            json_key:"google-play-key.json"
 
       - name: Cleanup
         if: always()
@@ -202,4 +110,3 @@ jobs:
           rm -f android/app/keystore.jks
           rm -f android/key.properties
           rm -f android/google-play-key.json
-          echo "✅ Cleanup completed"

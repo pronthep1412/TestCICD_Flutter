@@ -1,28 +1,59 @@
-# .github/workflows/ios.yml - Simplified iOS Build & Deploy
-name: Flutter iOS CI/CD
+# .github/workflows/ios-reusable.yml - Reusable iOS Workflow
+name: iOS Build & Deploy
 
 on:
-  push:
-    branches: [main, develop, staging]
-    paths:
-      - 'lib/**'
-      - 'ios/**'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - '.github/workflows/ios.yml'
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      version_code:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+      is_production:
+        required: false
+        type: string
+        default: 'false'
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_API_ISSUER_ID:
+        required: true
+      APP_STORE_CONNECT_API_KEY:
+        required: true
+      MATCH_PASSWORD:
+        required: true
+      MATCH_GIT_URL:
+        required: true
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 1.2.3)'
+        required: true
+        default: '1.0.0'
+      version_code:
+        description: 'Version code (e.g., 123)'
+        required: true
+        default: '1'
+      branch:
+        description: 'Branch name'
+        required: true
+        default: 'develop'
 
 env:
   FLUTTER_VERSION: '3.32.2'
-  DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
 jobs:
   build-and-deploy-ios:
     runs-on: macos-latest
-    timeout-minutes: 45
-    
-    # Environment protection
+    timeout-minutes: 35
     environment: 
-      name: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+      name: ${{ inputs.branch == 'main' && 'production' || inputs.branch }}
     
     steps:
       - name: Checkout
@@ -32,93 +63,22 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
           cache: true
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '15.4'
-
-      - name: Cache Flutter Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.PUB_CACHE }}
-            ~/Library/Caches/CocoaPods
-            ~/Library/Developer/Xcode/DerivedData
-            ~/.cocoapods
-          key: ${{ runner.os }}-flutter-ios-${{ hashFiles('pubspec.lock', 'ios/Podfile.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-flutter-ios-
 
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Install CocoaPods Dependencies
-        run: |
-          cd ios
-          echo "📱 Installing CocoaPods dependencies..."
-          pod install
-          echo "✅ CocoaPods installation completed"
+      - name: Install CocoaPods
+        run: cd ios && pod install
 
-      - name: Setup Ruby for Fastlane
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
-          bundler-cache: true
-          working-directory: ios
-
-      - name: Generate Version
-        id: version
+      - name: Update Version
         run: |
-          BRANCH_NAME="${{ github.ref_name }}"
-          RUN_NUMBER="${{ github.run_number }}"
-          BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
-          
-          case "$BRANCH_NAME" in
-            "main")
-              VERSION="$BASE_VERSION"
-              VERSION_CODE=$((2000000 + RUN_NUMBER))
-              TARGET="app_store"
-              ;;
-            "staging")
-              VERSION="$BASE_VERSION-beta.$RUN_NUMBER"
-              VERSION_CODE=$((1500000 + RUN_NUMBER))
-              TARGET="testflight_beta"
-              ;;
-            *)
-              VERSION="$BASE_VERSION-alpha.$RUN_NUMBER"
-              VERSION_CODE=$((1000000 + RUN_NUMBER))
-              TARGET="testflight_internal"
-              ;;
-          esac
-          
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
-          echo "target=$TARGET" >> $GITHUB_OUTPUT
-          echo "🍎 iOS Version: $VERSION (code: $VERSION_CODE, target: $TARGET)"
-
-      - name: Update pubspec.yaml Version
-        run: |
-          sed -i '' "s/^version: .*/version: ${{ steps.version.outputs.version }}+${{ steps.version.outputs.version_code }}/" pubspec.yaml
-          echo "✅ Updated pubspec.yaml version"
+          sed -i '' "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
 
       - name: Setup App Store Connect API
         run: |
           mkdir -p /tmp/ios-keys
           echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /tmp/ios-keys/AuthKey.p8
-          echo "✅ App Store Connect API key configured"
-
-      - name: Run Tests
-        run: |
-          echo "🧪 Running iOS tests..."
-          flutter test
-
-      - name: Analyze Code
-        run: |
-          echo "🔍 Running code analysis..."
-          flutter analyze
 
       - name: Build and Deploy iOS
         env:
@@ -127,71 +87,20 @@ jobs:
           APP_STORE_CONNECT_API_KEY_PATH: /tmp/ios-keys/AuthKey.p8
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
-          VERSION_NUMBER: ${{ steps.version.outputs.version }}
-          BUILD_NUMBER: ${{ steps.version.outputs.version_code }}
         run: |
           cd ios
-          echo "🔨 Building and deploying iOS..."
           
-          # Build and deploy with Fastlane
-          bundle exec fastlane ios deploy \
-            target:"${{ steps.version.outputs.target }}" \
-            version:"$VERSION_NUMBER" \
-            build_number:"$BUILD_NUMBER"
-          
-          echo "✅ iOS build and deploy completed"
-
-      - name: Upload Build Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-release-${{ steps.version.outputs.version }}-${{ github.run_number }}
-          path: |
-            ios/build/*.ipa
-            ios/build/*.dSYM.zip
-            ios/fastlane/logs/*.log
-          retention-days: 30
-
-      - name: iOS Build Summary
-        run: |
-          echo "## 🍎 iOS Build & Deploy Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Number:** ${{ steps.version.outputs.version_code }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Target:** ${{ steps.version.outputs.target }}" >> $GITHUB_STEP_SUMMARY
-          
-          # Deployment target description
-          case "${{ steps.version.outputs.target }}" in
-            "app_store")
-              echo "- **Deployment:** 🏪 App Store (Production)" >> $GITHUB_STEP_SUMMARY
-              ;;
-            "testflight_beta")
-              echo "- **Deployment:** 🧪 TestFlight (Beta)" >> $GITHUB_STEP_SUMMARY
-              ;;
-            "testflight_internal")
-              echo "- **Deployment:** 🔬 TestFlight (Internal)" >> $GITHUB_STEP_SUMMARY
-              ;;
+          TARGET="testflight_internal"
+          case "${{ inputs.branch }}" in
+            "main") TARGET="app_store" ;;
+            "staging") TARGET="testflight_beta" ;;
           esac
           
-          # File sizes
-          if [ -d "ios/build" ]; then
-            for ipa in ios/build/*.ipa; do
-              if [ -f "$ipa" ]; then
-                ipa_name=$(basename "$ipa")
-                ipa_size=$(ls -lh "$ipa" | awk '{print $5}')
-                echo "- **$ipa_name:** $ipa_size" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
-          fi
-          
-          echo "- **Status:** ✅ Build and Deploy Successful" >> $GITHUB_STEP_SUMMARY
-          echo "- **Xcode:** $(xcodebuild -version | head -1)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Flutter:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "*iOS deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+          bundle exec fastlane ios deploy \
+            target:$TARGET \
+            version:"${{ inputs.version }}" \
+            build_number:"${{ inputs.version_code }}"
 
       - name: Cleanup
         if: always()
-        run: |
-          rm -rf /tmp/ios-keys
-          echo "✅ Cleanup completed"
+        run: rm -rf /tmp/ios-keys
