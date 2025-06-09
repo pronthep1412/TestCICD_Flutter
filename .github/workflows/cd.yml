@@ -60,7 +60,7 @@ jobs:
   # Call reusable workflows (แนะนำ)
   deploy-android:
     needs: setup
-    uses: ./.github/workflows/android-reusable.yml
+    uses: ./.github/workflows/flutter-android-build.yml
     with:
       version: ${{ needs.setup.outputs.version }}
       version_code: ${{ needs.setup.outputs.version_code }}
@@ -70,7 +70,7 @@ jobs:
 
   deploy-ios:
     needs: setup
-    uses: ./.github/workflows/ios-reusable.yml
+    uses: ./.github/workflows/flutter-ios-build.yml
     with:
       version: ${{ needs.setup.outputs.version }}
       version_code: ${{ needs.setup.outputs.version_code }}
