@@ -379,18 +379,18 @@ jobs:
     secrets: inherit
 
   # iOS deployment with optimization
-  # deploy-ios:
-  #   needs: setup-test-and-prepare
-  #   uses: ./.github/workflows/flutter-ios-build.yml
-  #   with:
-  #     environment: 'release'
-  #     publish: true
-  #     version: ${{ needs.setup-test-and-prepare.outputs.version }}
-  #     version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
-  #     branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
-  #     cache_key: ${{ needs.setup-test-and-prepare.outputs.cache_key }}
-  #     build_artifacts: cd-flutter-ios-artifacts-${{ github.run_number }}
-  #   secrets: inherit
+  deploy-ios:
+    needs: setup-test-and-prepare
+    uses: ./.github/workflows/flutter-ios-build.yml
+    with:
+      environment: 'release'
+      publish: true
+      version: ${{ needs.setup-test-and-prepare.outputs.version }}
+      version_code: ${{ needs.setup-test-and-prepare.outputs.version_code }}
+      branch: ${{ needs.setup-test-and-prepare.outputs.branch }}
+      cache_key: ${{ needs.setup-test-and-prepare.outputs.cache_key }}
+      build_artifacts: cd-flutter-ios-artifacts-${{ github.run_number }}
+    secrets: inherit
 
   # Production deployment with manual approval
   finalize-production-release:
