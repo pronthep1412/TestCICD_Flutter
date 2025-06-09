@@ -24,8 +24,8 @@ on:
         required: true
       APP_STORE_CONNECT_API_KEY:
         required: true
-      MATCH_PASSWORD:
-        required: true
+      # MATCH_PASSWORD:
+      #   required: true
       MATCH_GIT_URL:
         required: true
   
@@ -92,7 +92,7 @@ jobs:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_PATH: /tmp/ios-keys/AuthKey.p8
-          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          # MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
         run: |
           cd ios
