@@ -139,6 +139,13 @@ jobs:
             exit 1
           fi
 
+      - name: Setup Ruby and Bundler
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.1'
+          bundler-cache: true
+          working-directory: android
+
       # 🚀 DEPLOY WITH EXISTING FASTLANE
       - name: Deploy to Google Play
         run: |
@@ -156,10 +163,9 @@ jobs:
           
           echo "📤 Deploying to track: $TRACK"
           
-          # Deploy with Fastlane (using existing Fastfile)
+          # Deploy with Fastlane
           cd android
-          bundle install
-          bundle exec fastlane deploy track:$TRACK
+          bundle exec fastlane deploy track:$TRACK    # 👈 ตอนนี้ bundle จะทำงานได้แล้ว
           
           echo "✅ Deployment completed!"
 
