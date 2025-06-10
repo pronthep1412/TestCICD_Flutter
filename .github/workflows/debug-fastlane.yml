@@ -1,0 +1,47 @@
+name: 🔍 Debug Fastlane Configuration
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug-fastlane:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: 🔍 Check Fastfile Content
+      run: |
+        echo "📄 Current Fastfile content:"
+        echo "=================================="
+        cat ios/fastlane/Fastfile
+        echo "=================================="
+        echo ""
+
+    - name: 🔍 Check Environment Variables
+      env:
+        APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+        APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      run: |
+        echo "🔍 Environment Variables Check:"
+        echo "=================================="
+        
+        echo "APP_STORE_CONNECT_API_KEY_ID: $APP_STORE_CONNECT_API_KEY_ID"
+        echo "APP_STORE_CONNECT_API_ISSUER_ID: $APP_STORE_CONNECT_API_ISSUER_ID"
+        
+        if [[ -n "$APP_STORE_CONNECT_API_KEY" ]]; then
+          echo "✅ APP_STORE_CONNECT_API_KEY: has content (${#APP_STORE_CONNECT_API_KEY} characters)"
+          echo "First 50 characters:"
+          echo "$APP_STORE_CONNECT_API_KEY" | head -c 50
+          echo ""
+        else
+          echo "❌ APP_STORE_CONNECT_API_KEY: is empty or not set"
+        fi
+
+    - name: 🔍 Test Fastlane Syntax
+      run: |
+        cd ios
+        echo "🔍 Testing Fastlane syntax..."
+        bundle exec fastlane ios --help || echo "❌ Fastlane syntax error"
