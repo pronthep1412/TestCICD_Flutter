@@ -104,17 +104,19 @@ jobs:
         run: |
           echo "🔑 Setting up App Store Connect API..."
           
-          # Create directory for API key
-          mkdir -p ~/.appstoreconnect/private_keys
+          # Create directory for API key (use absolute path)
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
           
-          # Decode and save API key
-          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+          # Decode and save API key (use absolute path)
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > "$HOME/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8"
           
-          # Verify API key
-          if [ -f ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8 ]; then
-            echo "✅ App Store Connect API key created"
+          # Verify API key exists
+          API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8"
+          if [ -f "$API_KEY_PATH" ]; then
+            echo "✅ App Store Connect API key created at: $API_KEY_PATH"
+            ls -la "$API_KEY_PATH"
           else
-            echo "❌ Failed to create API key"
+            echo "❌ Failed to create API key at: $API_KEY_PATH"
             exit 1
           fi
 
@@ -131,7 +133,7 @@ jobs:
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_PATH: ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+          APP_STORE_CONNECT_API_KEY_PATH: ${{ env.HOME }}/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8  # 👈 เปลี่ยนจาก ~/.appstoreconnect/...
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
           FL_UPDATE_PLIST_PATH: Runner/Info.plist
