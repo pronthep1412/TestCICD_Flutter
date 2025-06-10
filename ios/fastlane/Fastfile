@@ -150,10 +150,13 @@ platform :ios do
     api_key_content = ENV['APP_STORE_CONNECT_API_KEY']
     
     if api_key_id && api_issuer_id && api_key_content
+      require 'base64'
+      api_key_content2 = Base64.decode64(api_key_content)
+
       upload_options[:api_key] = {
         key_id: api_key_id,
         issuer_id: api_issuer_id,
-        key: api_key_content,
+        key: api_key_content2,
         duration: 1200,
         in_house: false
       }
