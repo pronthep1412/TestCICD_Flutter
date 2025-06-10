@@ -1,0 +1,3 @@
+# android/fastlane/Appfile
+json_key_file("google-play-key.json")           # 👈 ชี้ไปที่ไฟล์ที่ถูก decode จาก secret
+package_name("test.cicd.appibc") 

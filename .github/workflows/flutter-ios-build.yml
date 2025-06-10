@@ -1,4 +1,4 @@
-# .github/workflows/ios-reusable.yml - Reusable iOS Workflow
+# .github/workflows/ios-reusable.yml - Complete iOS Workflow with Fastlane Match
 name: iOS Build & Deploy
 
 on:
@@ -13,10 +13,10 @@ on:
       branch:
         required: true
         type: string
-      is_production:
+      environment:
         required: false
         type: string
-        default: 'false'
+        default: 'development'
     secrets:
       APP_STORE_CONNECT_API_KEY_ID:
         required: true
@@ -24,12 +24,13 @@ on:
         required: true
       APP_STORE_CONNECT_API_KEY:
         required: true
-      # MATCH_PASSWORD:
-      #   required: true
+      MATCH_PASSWORD:
+        required: true
       MATCH_GIT_URL:
         required: true
+      MATCH_PRIVATE_KEY:
+        required: true
   
-  # Manual trigger
   workflow_dispatch:
     inputs:
       version:
@@ -44,16 +45,19 @@ on:
         description: 'Branch name'
         required: true
         default: 'develop'
+      environment:
+        description: 'Environment'
+        required: false
+        default: 'development'
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: '3.24.0'
 
 jobs:
   build-and-deploy-ios:
     runs-on: macos-latest
     timeout-minutes: 35
-    environment: 
-      name: ${{ inputs.branch == 'main' && 'production' || inputs.branch }}
+    environment: ${{ inputs.environment }}
     
     steps:
       - name: Checkout
@@ -63,51 +67,160 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
           cache: true
 
-      - name: Get Dependencies
-        run: flutter pub get
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            ~/Library/Caches/CocoaPods
+          key: ${{ runner.os }}-flutter-ios-${{ hashFiles('pubspec.lock', 'ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-flutter-ios-
 
-      - name: Install CocoaPods
-        run: cd ios && pod install
+      - name: Get Dependencies
+        run: |
+          echo "📦 Installing Flutter dependencies..."
+          flutter pub get
 
       - name: Update Version
         run: |
+          echo "📝 Updating version to: ${{ inputs.version }}+${{ inputs.version_code }}"
           sed -i '' "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
+          grep "^version:" pubspec.yaml
 
-      # 🔒 Enhanced SSH setup for Match (only when needed)
+      # 🔑 SETUP SSH FOR FASTLANE MATCH
       - name: Setup SSH for Match
         uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.MATCH_PRIVATE_KEY }}
-        continue-on-error: true
 
+      # 🍎 SETUP APP STORE CONNECT API
       - name: Setup App Store Connect API
         run: |
-          mkdir -p /tmp/ios-keys
-          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /tmp/ios-keys/AuthKey.p8
+          echo "🔑 Setting up App Store Connect API..."
+          
+          # Create directory for API key
+          mkdir -p ~/.appstoreconnect/private_keys
+          
+          # Decode and save API key
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+          
+          # Verify API key
+          if [ -f ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8 ]; then
+            echo "✅ App Store Connect API key created"
+          else
+            echo "❌ Failed to create API key"
+            exit 1
+          fi
 
+      # 📱 INSTALL COCOAPODS DEPENDENCIES
+      - name: Install CocoaPods Dependencies
+        run: |
+          echo "📱 Installing CocoaPods dependencies..."
+          cd ios
+          pod install
+          echo "✅ CocoaPods installation completed"
+
+      # 🔨 BUILD & DEPLOY WITH FASTLANE
       - name: Build and Deploy iOS
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_PATH: /tmp/ios-keys/AuthKey.p8
-          # MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_PATH: ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          FL_UPDATE_PLIST_PATH: Runner/Info.plist
         run: |
-          cd ios
+          echo "🍎 Building and deploying iOS..."
           
-          TARGET="testflight_internal"
+          # Determine deployment target based on branch
           case "${{ inputs.branch }}" in
-            "main") TARGET="app_store" ;;
-            "staging") TARGET="testflight_beta" ;;
+            "main") 
+              TARGET="app_store"
+              echo "🏪 Target: App Store"
+              ;;
+            "staging") 
+              TARGET="testflight_beta"
+              echo "✈️ Target: TestFlight Beta"
+              ;;
+            *) 
+              TARGET="testflight_internal"
+              echo "🔒 Target: TestFlight Internal"
+              ;;
           esac
           
-          bundle exec fastlane ios deploy \
+          # Deploy with Fastlane (using existing Fastfile)
+          cd ios
+          bundle install --quiet
+          
+          echo "🚀 Starting deployment..."
+          bundle exec fastlane deploy \
             target:$TARGET \
             version:"${{ inputs.version }}" \
             build_number:"${{ inputs.version_code }}"
+          
+          echo "✅ iOS deployment completed!"
+
+      # 📊 VERIFY BUILD ARTIFACTS
+      - name: Verify Build Artifacts
+        run: |
+          echo "🔍 Verifying build artifacts..."
+          
+          # Check for IPA file
+          if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
+            echo "✅ IPA found: $ipa_file"
+            ls -lh "$ipa_file"
+          else
+            echo "⚠️ No IPA file found (may be normal for direct upload)"
+          fi
+          
+          # Check Fastlane logs
+          if [ -d "ios/fastlane/logs" ]; then
+            echo "📋 Fastlane logs available"
+            ls -la ios/fastlane/logs/
+          fi
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ inputs.version }}-${{ github.run_number }}
+          path: |
+            ios/build/
+            ios/fastlane/logs/
+            ios/*.ipa
+          retention-days: 30
+
+      - name: Build Summary
+        run: |
+          echo "## 🍎 iOS Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number:** ${{ inputs.version_code }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Show deployment target
+          case "${{ inputs.branch }}" in
+            "main") echo "- **Target:** 🏪 App Store" >> $GITHUB_STEP_SUMMARY ;;
+            "staging") echo "- **Target:** ✈️ TestFlight Beta" >> $GITHUB_STEP_SUMMARY ;;
+            *) echo "- **Target:** 🔒 TestFlight Internal" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+          
+          # Check for IPA
+          if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
+            size=$(ls -lh "$ipa_file" | awk '{print $5}')
+            echo "- **IPA Size:** $size" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "- **Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
 
       - name: Cleanup
         if: always()
-        run: rm -rf /tmp/ios-keys
+        run: |
+          echo "🧹 Cleaning up sensitive files..."
+          rm -rf ~/.appstoreconnect/
+          # SSH keys are cleaned up automatically by ssh-agent action

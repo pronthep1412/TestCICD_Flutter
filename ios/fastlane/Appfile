@@ -1,0 +1,3 @@
+# ios/fastlane/Appfile  
+app_identifier("test.cicd.appibc")       # 👈 แก้ให้ตรงกับ iOS bundle identifier
+apple_id("dev3@ibusiness.co.th") 

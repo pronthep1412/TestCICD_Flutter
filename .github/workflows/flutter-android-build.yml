@@ -1,4 +1,4 @@
-# .github/workflows/android-reusable.yml - FIXED with proper path handling
+# .github/workflows/android-reusable.yml - FIXED & SIMPLIFIED
 name: Android Build & Deploy
 
 on:
@@ -13,10 +13,10 @@ on:
       branch:
         required: true
         type: string
-      is_production:
+      environment:
         required: false
         type: string
-        default: 'false'
+        default: 'development'
     secrets:
       KEYSTORE_FILE:
         required: true
@@ -43,16 +43,19 @@ on:
         description: 'Branch name'
         required: true
         default: 'develop'
+      environment:
+        description: 'Environment'
+        required: false
+        default: 'development'
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: '3.24.0'
 
 jobs:
   build-and-deploy-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: 
-      name: ${{ inputs.branch == 'main' && 'production' || inputs.branch }}
+    timeout-minutes: 25
+    environment: ${{ inputs.environment }}
     
     steps:
       - name: Checkout
@@ -71,217 +74,80 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Cache Flutter Dependencies
+      - name: Cache Dependencies
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.PUB_CACHE }}
             ~/.gradle/wrapper
             ~/.gradle/caches
-            ~/.android/build-cache
-          key: ${{ runner.os }}-flutter-android-${{ hashFiles('pubspec.lock') }}
+          key: ${{ runner.os }}-flutter-${{ hashFiles('pubspec.lock') }}
           restore-keys: |
-            ${{ runner.os }}-flutter-android-
+            ${{ runner.os }}-flutter-
 
-      - name: Get Flutter Dependencies
+      - name: Get Dependencies
         run: |
-          echo "📦 Installing Flutter dependencies..."
+          echo "📦 Installing dependencies..."
           flutter pub get
-          echo "✅ Dependencies installed"
 
       - name: Update Version
         run: |
           echo "📝 Updating version to: ${{ inputs.version }}+${{ inputs.version_code }}"
           sed -i "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
-          
-          # Verify version update
-          echo "✅ Updated version:"
           grep "^version:" pubspec.yaml
 
-      - name: Setup Android Signing
+      # 🔑 SIMPLIFIED KEYSTORE SETUP
+      - name: Setup Android Keystore
         run: |
-          echo "🔑 Setting up Android signing..."
-          echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > android/app/keystore.jks
+          echo "🔑 Setting up Android keystore..."
           
-          # Verify keystore
-          if [ -f "android/app/keystore.jks" ]; then
-            keystore_size=$(ls -lh android/app/keystore.jks | awk '{print $5}')
-            echo "✅ Keystore created: $keystore_size"
-          else
-            echo "❌ Failed to create keystore!"
+          # Create keystore from base64
+          echo "${{ secrets.KEYSTORE_FILE }}" | base64 -d > android/app/key.jks
+          
+          # Verify keystore exists
+          if [ ! -f "android/app/key.jks" ]; then
+            echo "❌ Failed to create keystore"
             exit 1
           fi
           
+          # Create key.properties
           cat > android/key.properties << EOF
-          storeFile=keystore.jks
+          storeFile=key.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
           EOF
           
-          echo "✅ Android signing configured"
+          echo "✅ Keystore setup completed"
+          ls -la android/app/key.jks
 
-      # 🆕 Enhanced build with better verification
+      # 🔨 SIMPLIFIED BUILD
       - name: Build Android AAB
         run: |
           echo "🔨 Building Android App Bundle..."
-          echo "📋 Build configuration:"
-          echo "- Version: ${{ inputs.version }}"
-          echo "- Version Code: ${{ inputs.version_code }}"
-          echo "- Current directory: $(pwd)"
           
-          # Clean previous builds
-          flutter clean
-          flutter pub get
-          
-          # Build AAB
           flutter build appbundle --release \
             --build-name="${{ inputs.version }}" \
-            --build-number="${{ inputs.version_code }}" \
-            --verbose
+            --build-number="${{ inputs.version_code }}"
           
-          echo "🔍 Post-build verification:"
-          echo "- Current directory: $(pwd)"
-          echo "- Build directory contents:"
-          ls -la build/ || echo "Build directory not found"
-          
-          if [ -d "build/app" ]; then
-            echo "- App build directory:"
-            find build/app -name "*.aab" -o -name "*.apk" | head -10
-          fi
-          
-          # Verify AAB exists
-          AAB_PATH="build/app/outputs/bundle/release/app-release.aab"
-          if [ -f "$AAB_PATH" ]; then
-            aab_size=$(ls -lh "$AAB_PATH" | awk '{print $5}')
-            echo "✅ AAB built successfully: $aab_size"
-            echo "📦 AAB location: $(realpath $AAB_PATH)"
+          # Simple verification
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            echo "✅ AAB built successfully"
+            ls -lh build/app/outputs/bundle/release/app-release.aab
           else
-            echo "❌ AAB build failed!"
-            echo "🔍 Searching for AAB files:"
-            find . -name "*.aab" 2>/dev/null || echo "No AAB files found"
-            echo "🔍 Build outputs:"
-            find build -type f 2>/dev/null | head -20 || echo "Build directory is empty"
+            echo "❌ AAB build failed"
             exit 1
           fi
 
-      # 🆕 Enhanced Ruby and Fastlane setup
-      - name: Setup Ruby for Fastlane
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
-          bundler-cache: true
-          working-directory: android
-
-      - name: Setup Fastlane Configuration
+      # 🚀 DEPLOY WITH EXISTING FASTLANE
+      - name: Deploy to Google Play
         run: |
-          cd android
-          echo "📦 Setting up Fastlane..."
-          
-          # Create Gemfile if not exists
-          if [ ! -f "Gemfile" ]; then
-            cat > Gemfile << EOF
-          source "https://rubygems.org"
-          
-          gem "fastlane", "~> 2.217.0"
-          gem "bundler", "~> 2.4.0"
-          EOF
-          fi
-          
-          # Install dependencies
-          bundle install
-          
-          # Create fastlane directory
-          mkdir -p fastlane
+          echo "🚀 Deploying to Google Play..."
           
           # Setup Google Play credentials
-          echo "${{ secrets.GOOGLE_PLAY_JSON_KEY }}" | base64 -d > google-play-key.json
+          echo "${{ secrets.GOOGLE_PLAY_JSON_KEY }}" | base64 -d > android/google-play-key.json
           
-          # Verify credentials
-          if [ -f "google-play-key.json" ]; then
-            file_size=$(ls -lh google-play-key.json | awk '{print $5}')
-            echo "✅ Google Play credentials: $file_size"
-          else
-            echo "❌ Failed to create credentials!"
-            exit 1
-          fi
-          
-          # Create Appfile
-          cat > fastlane/Appfile << EOF
-          json_key_file("google-play-key.json")
-          package_name("${{ vars.ANDROID_PACKAGE_NAME || 'test.cicd.appibc' }}")
-          EOF
-          
-          # Create enhanced Fastfile
-          cat > fastlane/Fastfile << 'EOF'
-          default_platform(:android)
-          
-          platform :android do
-            desc "Deploy to Google Play Store"
-            lane :deploy do |options|
-              track = options[:track] || "internal"
-              aab_path = options[:aab]
-              
-              UI.message("🚀 Deploying to Google Play - Track: #{track}")
-              UI.message("📦 AAB Path: #{aab_path}")
-              UI.message("📂 Current directory: #{Dir.pwd}")
-              UI.message("📂 Working directory contents:")
-              Dir.glob("*").each { |f| UI.message("  - #{f}") }
-              
-              # Determine AAB path if not provided
-              if aab_path.nil? || aab_path.empty?
-                aab_path = "../build/app/outputs/bundle/release/app-release.aab"
-                UI.message("🔄 Using default AAB path: #{aab_path}")
-              end
-              
-              # Convert to absolute path
-              abs_aab_path = File.expand_path(aab_path)
-              UI.message("📍 Absolute AAB path: #{abs_aab_path}")
-              
-              # Verify AAB exists
-              unless File.exist?(abs_aab_path)
-                UI.error("❌ AAB file not found at: #{abs_aab_path}")
-                
-                # Debug information
-                UI.message("🔍 Searching for AAB files:")
-                Dir.glob("../**/*.aab").each { |f| UI.message("  Found: #{File.expand_path(f)}") }
-                
-                UI.message("🔍 Build directory structure:")
-                if Dir.exist?("../build")
-                  Dir.glob("../build/**/*").first(20).each { |f| UI.message("  #{f}") }
-                else
-                  UI.message("  Build directory not found")
-                end
-                
-                UI.user_error!("AAB file not found. Please check the build step.")
-              end
-              
-              aab_size = File.size(abs_aab_path)
-              UI.message("📏 AAB size: #{(aab_size / 1024.0 / 1024.0).round(2)} MB")
-              
-              upload_to_play_store(
-                track: track,
-                aab: abs_aab_path,
-                skip_upload_metadata: true,
-                skip_upload_images: true,
-                skip_upload_screenshots: true,
-                release_status: track == "production" ? "completed" : "draft"
-              )
-              
-              UI.success("✅ Successfully deployed to #{track} track!")
-            end
-          end
-          EOF
-          
-          echo "✅ Fastlane configuration ready"
-
-      # 🆕 Enhanced deployment with better error handling
-      - name: Deploy to Google Play Store
-        run: |
-          echo "🚀 Deploying to Google Play Store..."
-          
-          # Determine track
-          TRACK="internal"
+          # Determine track based on branch
           case "${{ inputs.branch }}" in
             "main") TRACK="production" ;;
             "staging") TRACK="beta" ;;
@@ -289,71 +155,41 @@ jobs:
           esac
           
           echo "📤 Deploying to track: $TRACK"
-          echo "📂 Current directory: $(pwd)"
-          echo "📂 Android directory: $(ls -la android/)"
           
-          # Get absolute path to AAB
-          AAB_ABSOLUTE_PATH="$(pwd)/build/app/outputs/bundle/release/app-release.aab"
-          echo "📍 AAB absolute path: $AAB_ABSOLUTE_PATH"
-          
-          # Final verification
-          if [ -f "$AAB_ABSOLUTE_PATH" ]; then
-            aab_size=$(ls -lh "$AAB_ABSOLUTE_PATH" | awk '{print $5}')
-            echo "✅ AAB verified: $aab_size"
-          else
-            echo "❌ AAB not found at expected location!"
-            echo "🔍 Searching entire workspace:"
-            find . -name "*.aab" 2>/dev/null || echo "No AAB files found"
-            exit 1
-          fi
-          
-          # Deploy with Fastlane
+          # Deploy with Fastlane (using existing Fastfile)
           cd android
-          bundle exec fastlane deploy \
-            track:"$TRACK" \
-            aab:"$AAB_ABSOLUTE_PATH"
+          bundle install
+          bundle exec fastlane deploy track:$TRACK
           
-          echo "✅ Deployment completed successfully!"
+          echo "✅ Deployment completed!"
 
-      - name: Upload Build Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: android-release-${{ inputs.version }}-${{ github.run_number }}
+          name: android-${{ inputs.version }}-${{ github.run_number }}
           path: |
             build/app/outputs/bundle/release/*.aab
-            build/app/outputs/flutter-apk/*.apk
-            android/fastlane/logs/*.log
+            android/fastlane/logs/
           retention-days: 30
 
-      - name: Android Build Summary
+      - name: Build Summary
         run: |
-          echo "## 🤖 Android Build & Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🤖 Android Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Version Code:** ${{ inputs.version_code }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           
-          # Determine track for display
-          TRACK="Internal"
-          case "${{ inputs.branch }}" in
-            "main") TRACK="Production" ;;
-            "staging") TRACK="Beta" ;;
-          esac
-          echo "- **Track:** $TRACK" >> $GITHUB_STEP_SUMMARY
-          
-          # File sizes
           if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
-            aab_size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
-            echo "- **AAB Size:** $aab_size" >> $GITHUB_STEP_SUMMARY
+            size=$(ls -lh build/app/outputs/bundle/release/app-release.aab | awk '{print $5}')
+            echo "- **AAB Size:** $size" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "- **Status:** ✅ Build and Deploy Successful" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "*Android deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
 
-      - name: Cleanup Sensitive Files
+      - name: Cleanup
         if: always()
         run: |
-          rm -f android/app/keystore.jks
-          rm -f android/key.properties
+          rm -f android/app/key.jks
+          rm -f android/key.properties  
           rm -f android/google-play-key.json
-          echo "✅ Cleanup completed"

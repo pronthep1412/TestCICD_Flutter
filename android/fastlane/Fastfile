@@ -1,28 +1,36 @@
-
-# android/fastlane/Fastfile - Android Fastlane Configuration
+# android/fastlane/Fastfile - Static Android Fastlane Configuration
 default_platform(:android)
 
 platform :android do
+  before_all do
+    ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
+    setup_ci if ENV['CI']
+  end
+
   desc "Deploy to Google Play Store"
   lane :deploy do |options|
     track = options[:track] || "internal"
-    aab_path = options[:aab] || "../build/app/outputs/bundle/release/app-release.aab"
-    json_key_path = options[:json_key] || "google-play-key.json"
     
-    # Validate inputs
-    UI.message("🚀 Deploying to Google Play - Track: #{track}")
-    UI.message("📦 AAB Path: #{aab_path}")
+    UI.message("🚀 Deploying Android to Google Play")
+    UI.message("📍 Track: #{track}")
+    UI.message("📦 Current directory: #{Dir.pwd}")
     
     # Verify AAB exists
-    unless File.exist?(aab_path)
-      UI.user_error!("AAB file not found at: #{aab_path}")
+    aab_path = "../build/app/outputs/bundle/release/app-release.aab"
+    abs_aab_path = File.expand_path(aab_path)
+    
+    unless File.exist?(abs_aab_path)
+      UI.user_error!("❌ AAB file not found at: #{abs_aab_path}")
     end
     
-    # Upload to Google Play
+    aab_size = File.size(abs_aab_path) / 1024.0 / 1024.0
+    UI.message("📏 AAB size: #{aab_size.round(2)} MB")
+    
+    # Upload to Google Play Store
     upload_to_play_store(
       track: track,
-      aab: aab_path,
-      json_key: json_key_path,
+      aab: abs_aab_path,
+      json_key: "google-play-key.json",
       skip_upload_metadata: true,
       skip_upload_images: true,
       skip_upload_screenshots: true,
@@ -32,16 +40,36 @@ platform :android do
     UI.success("✅ Successfully deployed to #{track} track!")
   end
   
-  desc "Deploy to specific branch track"
-  lane :deploy_main do
+  # Helper lanes for specific branches
+  desc "Deploy to production (main branch)"
+  lane :deploy_production do
     deploy(track: "production")
   end
   
-  lane :deploy_staging do
+  desc "Deploy to beta (staging branch)"
+  lane :deploy_beta do
     deploy(track: "beta")
   end
   
-  lane :deploy_develop do
+  desc "Deploy to internal (develop branch)"
+  lane :deploy_internal do
     deploy(track: "internal")
+  end
+  
+  # Debug/testing lane
+  desc "Build only (no deploy)"
+  lane :build_only do
+    gradle(task: "clean assembleRelease")
+    UI.success("✅ Android build completed!")
+  end
+  
+  # Error handling
+  error do |lane, exception|
+    UI.error("❌ Error in #{lane}: #{exception.message}")
+    
+    # Upload logs for debugging
+    if ENV['CI']
+      UI.message("📋 Fastlane logs available in artifacts")
+    end
   end
 end

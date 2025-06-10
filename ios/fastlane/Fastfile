@@ -1,39 +1,19 @@
-# ios/fastlane/Fastfile - iOS Fastlane Configuration
+# ios/fastlane/Fastfile - Static iOS Fastlane Configuration
 default_platform(:ios)
 
 platform :ios do
   before_all do
+    ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
     setup_ci if ENV['CI']
-    app_store_connect_api_key(
-      key_id: ENV['APP_STORE_CONNECT_API_KEY_ID'],
-      issuer_id: ENV['APP_STORE_CONNECT_API_ISSUER_ID'],
-      key_filepath: ENV['APP_STORE_CONNECT_API_KEY_PATH']
-    ) if ENV['APP_STORE_CONNECT_API_KEY_ID']
-  end
-
-  desc "Build iOS app without deploying"
-  lane :build_only do
-    # Setup certificates and provisioning profiles
-    match(
-      type: "appstore",
-      readonly: true,
-      git_url: ENV['MATCH_GIT_URL'],
-      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
-    )
     
-    # Build Flutter iOS
-    sh("cd .. && flutter build ios --release --no-codesign")
-    
-    # Build and archive with Xcode
-    build_app(
-      workspace: "Runner.xcworkspace",
-      scheme: "Runner",
-      export_method: "app-store",
-      output_directory: "build",
-      output_name: "Runner.ipa"
-    )
-    
-    UI.success("✅ iOS build completed successfully!")
+    # Setup App Store Connect API if available
+    if ENV['APP_STORE_CONNECT_API_KEY_ID']
+      app_store_connect_api_key(
+        key_id: ENV['APP_STORE_CONNECT_API_KEY_ID'],
+        issuer_id: ENV['APP_STORE_CONNECT_API_ISSUER_ID'],
+        key_filepath: ENV['APP_STORE_CONNECT_API_KEY_PATH']
+      )
+    end
   end
 
   desc "Deploy to App Store Connect"
@@ -42,10 +22,11 @@ platform :ios do
     version = options[:version] || "1.0.0"
     build_number = options[:build_number] || "1"
     
-    UI.message("🍎 Building and deploying iOS - Target: #{target}")
+    UI.message("🍎 Building and deploying iOS")
+    UI.message("🎯 Target: #{target}")
     UI.message("📋 Version: #{version} (#{build_number})")
     
-    # Setup certificates
+    # Setup certificates and provisioning profiles with Match
     match(
       type: "appstore",
       readonly: true,
@@ -57,10 +38,105 @@ platform :ios do
     increment_version_number(version_number: version)
     increment_build_number(build_number: build_number)
     
-    # Build Flutter iOS
+    # Build Flutter iOS (without codesign - Fastlane will handle it)
     sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
     
-    # Build and archive
+    # Build and archive with Xcode
+    build_app(
+      workspace: "Runner.xcworkspace",
+      scheme: "Runner",
+      export_method: "app-store",
+      output_directory: "build",
+      output_name: "Runner.ipa",
+      silent: true
+    )
+    
+    # Deploy based on target
+    case target
+    when "app_store"
+      deploy_to_app_store
+    when "testflight_beta"
+      deploy_to_testflight_beta
+    when "testflight_internal"
+      deploy_to_testflight_internal
+    else
+      UI.user_error!("❌ Unknown target: #{target}")
+    end
+    
+    UI.success("✅ Successfully deployed to #{target}!")
+  end
+  
+  # Private lanes for different deployment targets
+  private_lane :deploy_to_app_store do
+    UI.message("🏪 Uploading to App Store...")
+    upload_to_app_store(
+      ipa: "build/Runner.ipa",
+      skip_metadata: true,
+      skip_screenshots: true,
+      submit_for_review: false,
+      automatic_release: false
+    )
+  end
+  
+  private_lane :deploy_to_testflight_beta do
+    UI.message("✈️ Uploading to TestFlight (Beta)...")
+    upload_to_testflight(
+      ipa: "build/Runner.ipa",
+      groups: ["Beta Testers"],
+      distribute_external: true,
+      notify_external_testers: true,
+      changelog: "Beta release - please test and provide feedback"
+    )
+  end
+  
+  private_lane :deploy_to_testflight_internal do
+    UI.message("🔒 Uploading to TestFlight (Internal)...")
+    upload_to_testflight(
+      ipa: "build/Runner.ipa",
+      distribute_external: false,
+      notify_external_testers: false,
+      changelog: "Internal testing build"
+    )
+  end
+  
+  # Helper lanes for specific branches
+  desc "Deploy to App Store (main branch)"
+  lane :deploy_production do
+    deploy(target: "app_store")
+  end
+  
+  desc "Deploy to TestFlight Beta (staging branch)"
+  lane :deploy_staging do
+    deploy(target: "testflight_beta")
+  end
+  
+  desc "Deploy to TestFlight Internal (develop branch)"
+  lane :deploy_development do
+    deploy(target: "testflight_internal")
+  end
+  
+  # Debug/testing lanes
+  desc "Build only (no deploy)"
+  lane :build_only do |options|
+    version = options[:version] || "1.0.0"
+    build_number = options[:build_number] || "1"
+    
+    # Setup certificates
+    match(
+      type: "appstore",
+      readonly: true,
+      git_url: ENV['MATCH_GIT_URL'],
+      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+    )
+    
+    # Update version
+    increment_version_number(version_number: version)
+    increment_build_number(build_number: build_number)
+    
+    # Build Flutter
+    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
+    
+    # Build with Xcode
     build_app(
       workspace: "Runner.xcworkspace",
       scheme: "Runner",
@@ -69,47 +145,32 @@ platform :ios do
       output_name: "Runner.ipa"
     )
     
-    # Deploy based on target
-    case target
-    when "app_store"
-      UI.message("📤 Uploading to App Store...")
-      upload_to_app_store(
-        ipa: "build/Runner.ipa",
-        skip_metadata: true,
-        skip_screenshots: true,
-        submit_for_review: false
-      )
-    when "testflight_beta"
-      UI.message("📤 Uploading to TestFlight (Beta)...")
-      upload_to_testflight(
-        ipa: "build/Runner.ipa",
-        groups: ["Beta Testers"],
-        notify_external_testers: true
-      )
-    when "testflight_internal"
-      UI.message("📤 Uploading to TestFlight (Internal)...")
-      upload_to_testflight(
-        ipa: "build/Runner.ipa",
-        distribute_external: false,
-        notify_external_testers: false
-      )
-    else
-      UI.user_error!("Unknown target: #{target}")
+    UI.success("✅ iOS build completed!")
+  end
+  
+  desc "Setup certificates only"
+  lane :setup_certificates do
+    match(
+      type: "appstore",
+      readonly: true,
+      git_url: ENV['MATCH_GIT_URL'],
+      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+    )
+    UI.success("✅ Certificates setup completed!")
+  end
+  
+  # Error handling
+  error do |lane, exception|
+    UI.error("❌ Error in #{lane}: #{exception.message}")
+    
+    # Clean up build artifacts on error
+    if File.exist?("build")
+      UI.message("🧹 Cleaning up build artifacts...")
+      sh("rm -rf build")
     end
     
-    UI.success("✅ Successfully deployed to #{target}!")
-  end
-  
-  desc "Deploy to specific branch target"
-  lane :deploy_main do
-    deploy(target: "app_store")
-  end
-  
-  lane :deploy_staging do
-    deploy(target: "testflight_beta")
-  end
-  
-  lane :deploy_develop do
-    deploy(target: "testflight_internal")
+    if ENV['CI']
+      UI.message("📋 Fastlane logs available in artifacts")
+    end
   end
 end
