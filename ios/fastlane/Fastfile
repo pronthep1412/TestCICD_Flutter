@@ -12,14 +12,16 @@ platform :ios do
   lane :deploy do |options|
     UI.message("🚀 Deploying Flutter iOS to TestFlight...")
     
-    # Setup certificates
-    setup_certificates
+    # Setup certificates with API key
+    api_key = create_api_key_object
+    setup_certificates_with_api_key(api_key)
     
     # Build app
     build_flutter_app
     
-    # Upload to TestFlight with API key object
+    # Upload to TestFlight with same API key
     upload_to_testflight_with_api_key(
+      api_key: api_key,
       groups: ["Internal Testers"],
       skip_waiting: true
     )
@@ -30,19 +32,71 @@ platform :ios do
   desc "Build only"
   lane :build do
     UI.message("🔨 Building Flutter iOS app...")
-    setup_certificates
+    
+    # Setup certificates with API key
+    api_key = create_api_key_object
+    setup_certificates_with_api_key(api_key)
+    
+    # Build app
     build_flutter_app
+    
     UI.success("✅ Flutter iOS build completed!")
   end
 
-  # 🔐 Setup certificates (same as React Native style)
-  private_lane :setup_certificates do
+  # 🔑 สร้าง API key object (ใช้ร่วมกันได้)
+  private_lane :create_api_key_object do
+    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
+    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
+    api_key_raw_content = ENV['APP_STORE_CONNECT_API_KEY']
+    
+    if api_key_id && api_issuer_id && api_key_raw_content
+      begin
+        UI.message("✅ Creating App Store Connect API configuration")
+        UI.message("   Key ID: #{api_key_id}")
+        UI.message("   Issuer ID: #{api_issuer_id}")
+        UI.message("   Content length: #{api_key_raw_content.length} characters")
+        
+        # สร้าง API key object (structure เหมือน React Native)
+        {
+          key_id: api_key_id,
+          issuer_id: api_issuer_id,
+          key: api_key_raw_content,  # ใช้ "key" ไม่ใช่ "key_content"
+          duration: 1200,
+          in_house: false
+        }
+        
+      rescue => e
+        UI.error("❌ Failed to setup API key: #{e.message}")
+        nil
+      end
+    else
+      UI.message("⚠️ API key not available, will use traditional auth")
+      missing_items = []
+      missing_items << "API_KEY_ID" unless api_key_id
+      missing_items << "ISSUER_ID" unless api_issuer_id  
+      missing_items << "KEY_CONTENT" unless api_key_raw_content
+      UI.message("Missing: #{missing_items.join(', ')}")
+      nil
+    end
+  end
+
+  # 🔐 Setup certificates with API key
+  private_lane :setup_certificates_with_api_key do |api_key|
     UI.message("🔐 Setting up certificates...")
     
-    match(
-      type: "appstore",
-      readonly: false  # ← false เพื่อให้สามารถสร้าง cert ใหม่ได้
-    )
+    if api_key
+      match(
+        type: "appstore",
+        readonly: false,
+        api_key: api_key  # ✅ ส่ง API key object
+      )
+    else
+      # ถ้าไม่มี API key ใช้ traditional auth
+      match(
+        type: "appstore",
+        readonly: false
+      )
+    end
     
     UI.success("✅ Certificates setup completed")
   end
@@ -70,8 +124,10 @@ platform :ios do
     )
   end
 
-  # 🚀 Upload with API Key Object (same structure as React Native)
+  # 🚀 Upload with API Key Object
   private_lane :upload_to_testflight_with_api_key do |options|
+    api_key = options[:api_key]
+    
     upload_options = {
       skip_waiting_for_build_processing: options[:skip_waiting] || true,
       groups: options[:groups] || ["Internal Testers"],
@@ -80,44 +136,12 @@ platform :ios do
       changelog: "Automated Flutter build from #{ENV['GITHUB_REF_NAME'] || 'main'} branch"
     }
     
-    # ✅ สร้าง API key object (เหมือน React Native)
-    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
-    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
-    api_key_raw_content = ENV['APP_STORE_CONNECT_API_KEY']
-    
-    if api_key_id && api_issuer_id && api_key_raw_content
-      begin
-        # ใช้ raw content โดยตรง (ไม่ต้อง decode เพราะไม่ใช่ base64)
-        api_key_content = api_key_raw_content
-        
-        UI.message("✅ Creating App Store Connect API configuration")
-        UI.message("   Key ID: #{api_key_id}")
-        UI.message("   Issuer ID: #{api_issuer_id}")
-        UI.message("   Content length: #{api_key_content.length} characters")
-        
-        # สร้าง API key object (structure เหมือน React Native)
-        app_store_connect_api_key = {
-          key_id: api_key_id,
-          issuer_id: api_issuer_id,
-          key: api_key_content,  # ← ใช้ "key" ไม่ใช่ "key_content"
-          duration: 1200,
-          in_house: false
-        }
-        
-        upload_options[:api_key] = app_store_connect_api_key
-        UI.success("✅ Using App Store Connect API for TestFlight upload")
-        
-      rescue => e
-        UI.error("❌ Failed to setup API key: #{e.message}")
-        UI.message("⚠️ Falling back to traditional auth")
-      end
+    # ใช้ API key ถ้ามี
+    if api_key
+      upload_options[:api_key] = api_key
+      UI.success("✅ Using App Store Connect API for TestFlight upload")
     else
-      UI.message("⚠️ API key not available, using traditional auth")
-      missing_items = []
-      missing_items << "API_KEY_ID" unless api_key_id
-      missing_items << "ISSUER_ID" unless api_issuer_id  
-      missing_items << "KEY_CONTENT" unless api_key_raw_content
-      UI.message("Missing: #{missing_items.join(', ')}")
+      UI.message("⚠️ Using traditional auth for TestFlight upload")
     end
     
     upload_to_testflight(upload_options)
