@@ -2,84 +2,131 @@
 default_platform(:ios)
 
 platform :ios do
+  
+  before_all do
+    setup_ci if ENV['CI']
+    ensure_bundle_exec
+  end
+
   desc "Deploy to TestFlight"
   lane :deploy do |options|
-    # Setup CI environment
-    setup_ci
-
-    # สร้าง App Store Connect API key
-    api_key = app_store_connect_api_key(
-      key_id: ENV['APP_STORE_CONNECT_API_KEY_ID'],
-      issuer_id: ENV['APP_STORE_CONNECT_API_ISSUER_ID'],
-      key_content: ENV['APP_STORE_CONNECT_API_KEY']
+    UI.message("🚀 Deploying Flutter iOS to TestFlight...")
+    
+    # Setup certificates
+    setup_certificates
+    
+    # Build app
+    build_flutter_app
+    
+    # Upload to TestFlight with API key object
+    upload_to_testflight_with_api_key(
+      groups: ["Internal Testers"],
+      skip_waiting: true
     )
+    
+    UI.success("🎉 Successfully deployed to TestFlight!")
+  end
 
-    # ดาวน์โหลด certificates และ provisioning profiles
+  desc "Build only"
+  lane :build do
+    UI.message("🔨 Building Flutter iOS app...")
+    setup_certificates
+    build_flutter_app
+    UI.success("✅ Flutter iOS build completed!")
+  end
+
+  # 🔐 Setup certificates (same as React Native style)
+  private_lane :setup_certificates do
+    UI.message("🔐 Setting up certificates...")
+    
     match(
       type: "appstore",
-      readonly: false,
-      api_key: api_key
+      readonly: false  # ← false เพื่อให้สามารถสร้าง cert ใหม่ได้
     )
+    
+    UI.success("✅ Certificates setup completed")
+  end
 
-    # Build the app
+  # 🔨 Build Flutter app
+  private_lane :build_flutter_app do
+    # Build Flutter app first
+    sh("cd ../.. && flutter build ios --release --no-codesign")
+    
+    # Then build with Xcode
     build_app(
-      workspace: "Runner.xcworkspace",
       scheme: "Runner",
+      workspace: "Runner.xcworkspace", 
+      configuration: "Release",
       export_method: "app-store",
+      clean: true,
+      output_directory: "./build",
+      output_name: "Runner.ipa",
+      include_bitcode: false,
       export_options: {
         provisioningProfiles: {
-          ENV['APP_BUNDLE_ID'] => "match AppStore #{ENV['APP_BUNDLE_ID']}"
+          ENV['APP_BUNDLE_ID'] || "test.cicd.appibc" => "match AppStore #{ENV['APP_BUNDLE_ID'] || 'test.cicd.appibc'}"
         }
       }
     )
-
-    # Upload to TestFlight
-    upload_to_testflight(
-      api_key: api_key,
-      skip_waiting_for_build_processing: true,
-      beta_app_feedback_email: ENV['PILOT_BETA_APP_FEEDBACK_EMAIL'],
-      beta_app_description: "Internal testing build"
-    )
-
-    # แจ้งเตือนว่าเสร็จแล้ว
-    puts "🎉 Successfully deployed to TestFlight!"
   end
 
-  desc "Build only (no upload)"
-  lane :build do
-    setup_ci
-
-    api_key = app_store_connect_api_key(
-      key_id: ENV['APP_STORE_CONNECT_API_KEY_ID'],
-      issuer_id: ENV['APP_STORE_CONNECT_API_ISSUER_ID'],
-      key_content: ENV['APP_STORE_CONNECT_API_KEY']
-    )
-
-    match(
-      type: "appstore",
-      readonly: true,
-      api_key: api_key
-    )
-
-    build_app(
-      workspace: "Runner.xcworkspace",
-      scheme: "Runner",
-      export_method: "app-store"
-    )
+  # 🚀 Upload with API Key Object (same structure as React Native)
+  private_lane :upload_to_testflight_with_api_key do |options|
+    upload_options = {
+      skip_waiting_for_build_processing: options[:skip_waiting] || true,
+      groups: options[:groups] || ["Internal Testers"],
+      distribute_external: false,
+      notify_external_testers: false,
+      changelog: "Automated Flutter build from #{ENV['GITHUB_REF_NAME'] || 'main'} branch"
+    }
+    
+    # ✅ สร้าง API key object (เหมือน React Native)
+    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
+    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
+    api_key_raw_content = ENV['APP_STORE_CONNECT_API_KEY']
+    
+    if api_key_id && api_issuer_id && api_key_raw_content
+      begin
+        # ใช้ raw content โดยตรง (ไม่ต้อง decode เพราะไม่ใช่ base64)
+        api_key_content = api_key_raw_content
+        
+        UI.message("✅ Creating App Store Connect API configuration")
+        UI.message("   Key ID: #{api_key_id}")
+        UI.message("   Issuer ID: #{api_issuer_id}")
+        UI.message("   Content length: #{api_key_content.length} characters")
+        
+        # สร้าง API key object (structure เหมือน React Native)
+        app_store_connect_api_key = {
+          key_id: api_key_id,
+          issuer_id: api_issuer_id,
+          key: api_key_content,  # ← ใช้ "key" ไม่ใช่ "key_content"
+          duration: 1200,
+          in_house: false
+        }
+        
+        upload_options[:api_key] = app_store_connect_api_key
+        UI.success("✅ Using App Store Connect API for TestFlight upload")
+        
+      rescue => e
+        UI.error("❌ Failed to setup API key: #{e.message}")
+        UI.message("⚠️ Falling back to traditional auth")
+      end
+    else
+      UI.message("⚠️ API key not available, using traditional auth")
+      missing_items = []
+      missing_items << "API_KEY_ID" unless api_key_id
+      missing_items << "ISSUER_ID" unless api_issuer_id  
+      missing_items << "KEY_CONTENT" unless api_key_raw_content
+      UI.message("Missing: #{missing_items.join(', ')}")
+    end
+    
+    upload_to_testflight(upload_options)
   end
 
-  desc "Update certificates and provisioning profiles"
-  lane :certificates do
-    api_key = app_store_connect_api_key(
-      key_id: ENV['APP_STORE_CONNECT_API_KEY_ID'],
-      issuer_id: ENV['APP_STORE_CONNECT_API_ISSUER_ID'],
-      key_content: ENV['APP_STORE_CONNECT_API_KEY']
-    )
-
-    match(
-      type: "appstore",
-      force_for_new_devices: true,
-      api_key: api_key
-    )
+  # Error handling
+  error do |lane, exception|
+    error_message = "❌ Flutter iOS deployment failed in lane '#{lane}': #{exception.message}"
+    UI.error(error_message)
+    raise exception
   end
 end
