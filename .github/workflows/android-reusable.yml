@@ -151,10 +151,27 @@ jobs:
         run: |
           echo "🚀 Deploying to Google Play..."
           
+          # 🔍 DEBUG: ตรวจสอบ AAB file
+          echo "🔍 Searching for AAB files..."
+          find . -name "*.aab" -type f
+          find . -path "*/outputs/bundle/*" -type f
+          
+          # Check expected location
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            echo "✅ AAB found at expected location"
+            ls -lh build/app/outputs/bundle/release/app-release.aab
+          else
+            echo "❌ AAB not found at expected location"
+            echo "📂 Checking build directory structure..."
+            ls -la build/ || echo "No build directory"
+            ls -la build/app/ || echo "No build/app directory"  
+            ls -la build/app/outputs/ || echo "No outputs directory"
+          fi
+          
           # Setup Google Play credentials
           echo "${{ secrets.GOOGLE_PLAY_JSON_KEY }}" | base64 -d > android/google-play-key.json
           
-          # Determine track based on branch
+          # Determine track
           case "${{ inputs.branch }}" in
             "main") TRACK="production" ;;
             "staging") TRACK="beta" ;;
@@ -163,11 +180,15 @@ jobs:
           
           echo "📤 Deploying to track: $TRACK"
           
-          # Deploy with Fastlane
-          cd android
-          bundle exec fastlane deploy track:$TRACK    # 👈 ตอนนี้ bundle จะทำงานได้แล้ว
-          
-          echo "✅ Deployment completed!"
+          # Deploy with Fastlane (only if AAB exists)
+          if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
+            cd android
+            bundle exec fastlane deploy track:$TRACK
+            echo "✅ Deployment completed!"
+          else
+            echo "❌ Cannot deploy: AAB file missing"
+            exit 1
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4

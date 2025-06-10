@@ -15,21 +15,34 @@ platform :android do
     UI.message("📍 Track: #{track}")
     UI.message("📦 Current directory: #{Dir.pwd}")
     
-    # Verify AAB exists
-    aab_path = "../build/app/outputs/bundle/release/app-release.aab"
-    abs_aab_path = File.expand_path(aab_path)
+    # 🔍 Look for AAB file in multiple locations
+    possible_paths = [
+      "../build/app/outputs/bundle/release/app-release.aab",
+      "../../build/app/outputs/bundle/release/app-release.aab",
+      "../app/build/outputs/bundle/release/app-release.aab"
+    ]
     
-    unless File.exist?(abs_aab_path)
-      UI.user_error!("❌ AAB file not found at: #{abs_aab_path}")
+    aab_path = nil
+    possible_paths.each do |path|
+      abs_path = File.expand_path(path)
+      if File.exist?(abs_path)
+        aab_path = abs_path
+        UI.message("✅ Found AAB at: #{aab_path}")
+        break
+      end
     end
     
-    aab_size = File.size(abs_aab_path) / 1024.0 / 1024.0
+    unless aab_path
+      UI.user_error!("❌ AAB file not found in any expected location")
+    end
+    
+    aab_size = File.size(aab_path) / 1024.0 / 1024.0
     UI.message("📏 AAB size: #{aab_size.round(2)} MB")
     
     # Upload to Google Play Store
     upload_to_play_store(
       track: track,
-      aab: abs_aab_path,
+      aab: aab_path,
       json_key: "google-play-key.json",
       skip_upload_metadata: true,
       skip_upload_images: true,
