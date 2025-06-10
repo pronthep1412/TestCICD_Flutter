@@ -99,6 +99,21 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.MATCH_PRIVATE_KEY }}
 
+      # 🔍 DEBUG SSH CONNECTION
+      - name: Test SSH Connection to Match Repository
+        run: |
+          echo "🔍 Testing SSH connection to Match repository..."
+          
+          # Test SSH connection to GitHub
+          ssh -T git@github.com || true
+          
+          # Test specific repository access
+          echo "Testing access to: ${{ secrets.MATCH_GIT_URL }}"
+          git ls-remote "${{ secrets.MATCH_GIT_URL }}" || true
+          
+          # Show SSH key fingerprint
+          ssh-add -l || true
+
       # 🍎 SETUP APP STORE CONNECT API
       - name: Setup App Store Connect API
         run: |
