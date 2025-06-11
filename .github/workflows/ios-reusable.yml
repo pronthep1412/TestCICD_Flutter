@@ -1,4 +1,4 @@
-# .github/workflows/ios-reusable.yml - Complete iOS Workflow with Fastlane Match
+# .github/workflows/ios-reusable.yml - Updated with API key content support
 name: iOS Build & Deploy
 
 on:
@@ -63,6 +63,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: System Information
+        run: |
+          echo "🖥️ System Information:"
+          echo "- macOS: $(sw_vers -productVersion)"
+          echo "- Xcode: $(xcodebuild -version | head -1)"
+          echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -78,6 +85,7 @@ jobs:
             ~/.gradle/wrapper
             ~/.gradle/caches
             ~/Library/Caches/CocoaPods
+            ~/Library/Developer/Xcode/DerivedData
           key: ${{ runner.os }}-flutter-ios-${{ hashFiles('pubspec.lock', 'ios/Podfile.lock') }}
           restore-keys: |
             ${{ runner.os }}-flutter-ios-
@@ -86,12 +94,14 @@ jobs:
         run: |
           echo "📦 Installing Flutter dependencies..."
           flutter pub get
+          echo "✅ Flutter dependencies installed"
 
       - name: Update Version
         run: |
           echo "📝 Updating version to: ${{ inputs.version }}+${{ inputs.version_code }}"
           sed -i '' "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
           grep "^version:" pubspec.yaml
+          echo "✅ Version updated in pubspec.yaml"
 
       # 🔑 SETUP SSH FOR FASTLANE MATCH
       - name: Setup SSH for Match
@@ -114,25 +124,35 @@ jobs:
           # Show SSH key fingerprint
           ssh-add -l || true
 
-      # 🍎 SETUP APP STORE CONNECT API
-      - name: Setup App Store Connect API
+      # ✅ ไม่ต้องสร้าง API key file แล้ว - ใช้ content โดยตรง
+      - name: Verify App Store Connect API Configuration
         run: |
-          echo "🔑 Setting up App Store Connect API..."
+          echo "🔑 Verifying App Store Connect API configuration..."
           
-          # Create directory for API key (use /Users/runner explicitly)
-          mkdir -p /Users/runner/.appstoreconnect/private_keys
-          
-          # Decode and save API key  
-          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /Users/runner/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
-          
-          # Verify API key exists
-          API_KEY_PATH="/Users/runner/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8"
-          if [ -f "$API_KEY_PATH" ]; then
-            echo "✅ App Store Connect API key created at: $API_KEY_PATH"
-            ls -la "$API_KEY_PATH"
+          # Check if all required API variables are available
+          if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}" ]; then
+            echo "✅ API Key ID: Available"
           else
-            echo "❌ Failed to create API key at: $API_KEY_PATH"
-            exit 1
+            echo "❌ API Key ID: Missing"
+          fi
+          
+          if [ -n "${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}" ]; then
+            echo "✅ Issuer ID: Available"
+          else
+            echo "❌ Issuer ID: Missing"
+          fi
+          
+          if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY }}" ]; then
+            # Check if it's valid base64
+            if echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /dev/null 2>&1; then
+              echo "✅ API Key Content: Available and valid base64"
+              decoded_length=$(echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d | wc -c | tr -d ' ')
+              echo "   Decoded length: $decoded_length characters"
+            else
+              echo "❌ API Key Content: Invalid base64 format"
+            fi
+          else
+            echo "❌ API Key Content: Missing"
           fi
 
       # 📱 INSTALL COCOAPODS DEPENDENCIES
@@ -140,15 +160,36 @@ jobs:
         run: |
           echo "📱 Installing CocoaPods dependencies..."
           cd ios
-          pod install
+          
+          # Check if cache hit
+          if [ -d "Pods" ] && [ -f "Podfile.lock" ]; then
+            echo "✅ Pods cache found, verifying integrity..."
+            pod install --deployment 2>/dev/null || {
+              echo "⚠️ Cache invalid, reinstalling..."
+              rm -rf Pods Podfile.lock
+              pod install
+            }
+          else
+            echo "🔄 Installing fresh Pods..."
+            pod install
+          fi
+          
           echo "✅ CocoaPods installation completed"
+
+      # 🔧 Enhanced Ruby setup for Fastlane
+      - name: Setup Ruby for Fastlane
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: ios
 
       # 🔨 BUILD & DEPLOY WITH FASTLANE
       - name: Build and Deploy iOS
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_PATH: /Users/runner/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
           FL_UPDATE_PLIST_PATH: Runner/Info.plist
@@ -171,9 +212,17 @@ jobs:
               ;;
           esac
           
-          # Deploy with Fastlane (using existing Fastfile)
+          # Pre-build validation
+          echo "📋 Build configuration:"
+          echo "- Target: $TARGET"
+          echo "- Version: ${{ inputs.version }}"
+          echo "- Build: ${{ inputs.version_code }}"
+          echo "- Branch: ${{ inputs.branch }}"
+          echo "- API Key ID: ${APP_STORE_CONNECT_API_KEY_ID:0:8}..."
+          echo "- API Key Content: $([ -n "$APP_STORE_CONNECT_API_KEY_CONTENT" ] && echo "Available" || echo "Missing")"
+          
+          # Deploy with Fastlane
           cd ios
-          bundle install --quiet
           
           echo "🚀 Starting deployment..."
           bundle exec fastlane deploy \
@@ -191,7 +240,8 @@ jobs:
           # Check for IPA file
           if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
             echo "✅ IPA found: $ipa_file"
-            ls -lh "$ipa_file"
+            ipa_size=$(ls -lh "$ipa_file" | awk '{print $5}')
+            echo "   Size: $ipa_size"
           else
             echo "⚠️ No IPA file found (may be normal for direct upload)"
           fi
@@ -200,6 +250,12 @@ jobs:
           if [ -d "ios/fastlane/logs" ]; then
             echo "📋 Fastlane logs available"
             ls -la ios/fastlane/logs/
+          fi
+          
+          # Check build directory
+          if [ -d "ios/build" ]; then
+            echo "📦 Build directory contents:"
+            ls -la ios/build/
           fi
 
       - name: Upload Artifacts
@@ -219,6 +275,8 @@ jobs:
           echo "- **Build Number:** ${{ inputs.version_code }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runner:** ${{ runner.os }} ($(sw_vers -productVersion))" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
           
           # Show deployment target
           case "${{ inputs.branch }}" in
@@ -227,17 +285,31 @@ jobs:
             *) echo "- **Target:** 🔒 TestFlight Internal" >> $GITHUB_STEP_SUMMARY ;;
           esac
           
-          # Check for IPA
+          # Check for IPA and show size
           if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
             size=$(ls -lh "$ipa_file" | awk '{print $5}')
             echo "- **IPA Size:** $size" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "- **Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          # Performance metrics
+          if [ -f "ios/fastlane/logs/"*.log ]; then
+            echo "- **Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Build Status:** ⚠️ Check logs" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Build completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 
       - name: Cleanup
         if: always()
         run: |
           echo "🧹 Cleaning up sensitive files..."
-          rm -rf ~/.appstoreconnect/
+          # ✅ ไม่ต้อง cleanup API key file แล้วเพราะไม่ได้สร้าง
           # SSH keys are cleaned up automatically by ssh-agent action
+          
+          # Clean up any temporary build files
+          rm -rf ios/build/temp 2>/dev/null || true
+          rm -rf ios/fastlane/tmp 2>/dev/null || true
+          
+          echo "✅ Cleanup completed"
