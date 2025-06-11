@@ -300,11 +300,11 @@ jobs:
         env:
           API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
 
-      # 🚀 Enhanced Debug Build
-      - name: Build Flutter iOS Debug
+      # 🚀 Enhanced Debug Build (for testing only)
+      - name: Build Flutter iOS Debug  
         if: inputs.environment == 'debug'
         run: |
-          echo "🔨 Building Flutter iOS Debug..."
+          echo "🔨 Building Flutter iOS Debug (Testing only)..."
           
           # Pre-build validation
           echo "📋 Pre-build checks:"
@@ -312,12 +312,13 @@ jobs:
           echo "- Dart version: $(dart --version)"
           echo "- iOS deployment target: $(grep IPHONEOS_DEPLOYMENT_TARGET ios/Runner.xcodeproj/project.pbxproj | head -1 || echo 'Not found')"
           
-          # Build Flutter for iOS
+          # Build Flutter for iOS Simulator
           set -o pipefail
           flutter build ios --debug --simulator | tee build.log
           
           if [ $? -eq 0 ]; then
             echo "✅ Flutter iOS Debug build completed successfully"
+            echo "ℹ️ Debug builds are for testing only - no deployment"
             
             # Build summary
             if [ -f "build.log" ]; then
@@ -394,11 +395,23 @@ jobs:
           
           # Determine deployment track
           TRACK="TestFlight Internal"
+          FASTLANE_TARGET="testflight_internal"
           case "${{ inputs.branch }}" in
-            "main") TRACK="App Store" ;;
-            "staging") TRACK="TestFlight Beta" ;;
+            "main") 
+              TRACK="App Store"
+              FASTLANE_TARGET="app_store"
+              ;;
+            "staging") 
+              TRACK="TestFlight Beta"
+              FASTLANE_TARGET="testflight_beta"
+              ;;
+            *) 
+              TRACK="TestFlight Internal"
+              FASTLANE_TARGET="testflight_internal"
+              ;;
           esac
           echo "- Deployment track: $TRACK"
+          echo "- Fastlane target: $FASTLANE_TARGET"
           
           # Deploy with Fastlane
           case "${{ inputs.branch }}" in
@@ -513,6 +526,12 @@ jobs:
             echo "- **Cache:** ❌ Miss (Fresh install)" >> $GITHUB_STEP_SUMMARY
           fi
           
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ℹ️ Branch Deployment Rules" >> $GITHUB_STEP_SUMMARY
+          echo "- **\`main\`** → 🏪 App Store (Production release)" >> $GITHUB_STEP_SUMMARY
+          echo "- **\`staging\`** → ✈️ TestFlight Beta (External testers)" >> $GITHUB_STEP_SUMMARY  
+          echo "- **\`develop\`** → 🔒 TestFlight Internal (Internal testers)" >> $GITHUB_STEP_SUMMARY
+          echo "- **\`other\`** → 🔒 TestFlight Internal (Internal testers)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*Build completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 

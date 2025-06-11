@@ -1,4 +1,4 @@
-# .github/workflows/cd.yml - Complete Flutter CD Pipeline
+# .github/workflows/cd.yml - Enhanced Flutter CD Pipeline with React Native optimization patterns
 name: Flutter Continuous Deployment
 
 on:
@@ -10,6 +10,7 @@ on:
       - 'ios/**'
       - 'pubspec.yaml'
       - 'pubspec.lock'
+      - '.github/workflows/**'
   
   workflow_dispatch:
     inputs:
@@ -25,6 +26,16 @@ on:
       force_version:
         description: 'Force specific version (optional)'
         required: false
+      publish:
+        description: 'Deploy to stores'
+        required: false
+        type: boolean
+        default: true
+      build_only:
+        description: 'Build only (no deployment)'
+        required: false
+        type: boolean
+        default: false
 
 env:
   FLUTTER_VERSION: '3.32.2'
@@ -40,8 +51,10 @@ jobs:
       branch: ${{ steps.version.outputs.branch }}
       environment: ${{ steps.version.outputs.environment }}
       is_production: ${{ steps.version.outputs.is_production }}
+      publish: ${{ steps.version.outputs.publish }}
       deploy_android: ${{ steps.changes.outputs.deploy_android }}
       deploy_ios: ${{ steps.changes.outputs.deploy_ios }}
+      cache_key: ${{ steps.cache.outputs.cache_key }}
       
     steps:
       - name: Checkout
@@ -49,23 +62,46 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Determine Branch
+      - name: System Information
+        run: |
+          echo "🖥️ Setup Information:"
+          echo "- Ubuntu: $(lsb_release -d | cut -f2)"
+          echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
+          echo "- Git commit: ${{ github.sha }}"
+          echo "- Trigger: ${{ github.event_name }}"
+
+      - name: Determine Branch and Settings
         id: branch
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             BRANCH="${{ inputs.branch }}"
+            PUBLISH="${{ inputs.publish }}"
+            BUILD_ONLY="${{ inputs.build_only }}"
           else
             BRANCH="${{ github.ref_name }}"
+            PUBLISH="true"
+            BUILD_ONLY="false"
           fi
+          
+          # Override publish if build_only is true
+          if [ "$BUILD_ONLY" = "true" ]; then
+            PUBLISH="false"
+          fi
+          
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "publish=$PUBLISH" >> $GITHUB_OUTPUT
+          echo "build_only=$BUILD_ONLY" >> $GITHUB_OUTPUT
+          
           echo "🌟 Target branch: $BRANCH"
+          echo "🚀 Publish: $PUBLISH"
+          echo "🔨 Build only: $BUILD_ONLY"
 
       - name: Analyze Changes
         id: changes
         run: |
           echo "🔍 Analyzing changes..."
           
-          # For manual dispatch, deploy both
+          # For manual dispatch, check inputs or deploy both
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "deploy_android=true" >> $GITHUB_OUTPUT
             echo "deploy_ios=true" >> $GITHUB_OUTPUT
@@ -73,25 +109,43 @@ jobs:
             exit 0
           fi
           
-          # Check changed files
-          git diff --name-only HEAD~1 HEAD > changed_files.txt
+          # Check changed files in last commit
+          if [ "${{ github.event_name }}" = "push" ]; then
+            git diff --name-only HEAD~1 HEAD > changed_files.txt
+          else
+            # For PRs, compare with target branch
+            git diff --name-only origin/${{ github.base_ref }}...HEAD > changed_files.txt
+          fi
           
-          # Check if Android/iOS specific changes
+          echo "📄 Changed files:"
+          cat changed_files.txt | head -10
+          
+          # Check if platform-specific changes
           ANDROID_CHANGED="false"
           IOS_CHANGED="false"
           
-          if grep -E "(android/|\.gradle|build\.gradle)" changed_files.txt > /dev/null; then
+          if grep -E "(android/|\.gradle|build\.gradle|\.java|\.kt)" changed_files.txt > /dev/null; then
             ANDROID_CHANGED="true"
+            echo "🤖 Android-specific changes detected"
           fi
           
-          if grep -E "(ios/|\.podspec|Podfile)" changed_files.txt > /dev/null; then
+          if grep -E "(ios/|\.podspec|Podfile|\.swift|\.m|\.h)" changed_files.txt > /dev/null; then
             IOS_CHANGED="true"
+            echo "🍎 iOS-specific changes detected"
           fi
           
-          # If core changes, deploy both
-          if grep -E "(lib/|pubspec\.(yaml|lock))" changed_files.txt > /dev/null; then
+          # If core Flutter changes, deploy both
+          if grep -E "(lib/|pubspec\.(yaml|lock)|assets/|\.dart)" changed_files.txt > /dev/null; then
             ANDROID_CHANGED="true"
             IOS_CHANGED="true"
+            echo "🎯 Core Flutter changes detected - deploying both platforms"
+          fi
+          
+          # If workflow changes, deploy both
+          if grep -E "\.github/workflows/" changed_files.txt > /dev/null; then
+            ANDROID_CHANGED="true"
+            IOS_CHANGED="true"
+            echo "⚙️ Workflow changes detected - deploying both platforms"
           fi
           
           echo "deploy_android=$ANDROID_CHANGED" >> $GITHUB_OUTPUT
@@ -104,6 +158,7 @@ jobs:
         id: version
         run: |
           BRANCH="${{ steps.branch.outputs.branch }}"
+          PUBLISH="${{ steps.branch.outputs.publish }}"
           RUN_NUMBER="${{ github.run_number }}"
           
           # Get base version from pubspec.yaml
@@ -120,19 +175,19 @@ jobs:
             "main")
               VERSION="$BASE_VERSION"
               VERSION_CODE=$((3000000 + RUN_NUMBER))
-              ENVIRONMENT="production"
+              ENVIRONMENT="release"
               IS_PRODUCTION="true"
               ;;
             "staging")
               VERSION="$BASE_VERSION-beta.$RUN_NUMBER"
               VERSION_CODE=$((2000000 + RUN_NUMBER))
-              ENVIRONMENT="staging"
+              ENVIRONMENT="release"
               IS_PRODUCTION="false"
               ;;
             *)
               VERSION="$BASE_VERSION-alpha.$RUN_NUMBER"
               VERSION_CODE=$((1000000 + RUN_NUMBER))
-              ENVIRONMENT="development"
+              ENVIRONMENT="release"  # ✅ แก้ไขเป็น release เพื่อให้ deploy ได้
               IS_PRODUCTION="false"
               ;;
           esac
@@ -142,12 +197,22 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
           echo "is_production=$IS_PRODUCTION" >> $GITHUB_OUTPUT
+          echo "publish=$PUBLISH" >> $GITHUB_OUTPUT
           
           echo "📋 Version Info:"
           echo "- Version: $VERSION"
           echo "- Version Code: $VERSION_CODE"
           echo "- Environment: $ENVIRONMENT"
           echo "- Is Production: $IS_PRODUCTION"
+          echo "- Will Publish: $PUBLISH"
+
+      - name: Generate Cache Key
+        id: cache
+        run: |
+          # Create comprehensive cache key
+          CACHE_KEY="flutter-${{ env.FLUTTER_VERSION }}-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'android/app/build.gradle', 'ios/Podfile.lock') }}-${{ github.run_number }}"
+          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "🔑 Cache key: $CACHE_KEY"
 
       - name: Setup Summary
         run: |
@@ -155,166 +220,390 @@ jobs:
           echo "- **Branch:** ${{ steps.version.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${{ steps.version.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Publish:** ${{ steps.version.outputs.publish }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Android Deploy:** ${{ steps.changes.outputs.deploy_android }}" >> $GITHUB_STEP_SUMMARY
           echo "- **iOS Deploy:** ${{ steps.changes.outputs.deploy_ios }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cache Key:** \`${{ steps.cache.outputs.cache_key }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Add deployment targets explanation
+          echo "### 🎯 Deployment Targets" >> $GITHUB_STEP_SUMMARY
+          case "${{ steps.version.outputs.branch }}" in
+            "main")
+              echo "- **🏪 App Store** (Production release)" >> $GITHUB_STEP_SUMMARY
+              ;;
+            "staging") 
+              echo "- **✈️ TestFlight Beta** (External testers)" >> $GITHUB_STEP_SUMMARY
+              ;;
+            *)
+              echo "- **🔒 TestFlight Internal** (Internal testers)" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+
+  # 🔨 BUILD DEPENDENCIES & SHARED ARTIFACTS
+  build-dependencies:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      cache_key: ${{ needs.setup.outputs.cache_key }}
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+          cache: true
+
+      - name: Cache Flutter Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PUB_CACHE }}
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+            .dart_tool
+          key: ${{ needs.setup.outputs.cache_key }}
+          restore-keys: |
+            flutter-${{ env.FLUTTER_VERSION }}-${{ runner.os }}-
+
+      - name: Install Dependencies
+        run: |
+          echo "📦 Installing Flutter dependencies..."
+          flutter pub get
+          
+          # Validate dependencies
+          flutter pub deps
+          
+          echo "✅ Dependencies installed and validated"
+
+      - name: Run Code Analysis
+        run: |
+          echo "🔍 Running code analysis..."
+          
+          # Static analysis
+          flutter analyze --no-fatal-infos
+          
+          # Format check
+          dart format --output=none --set-exit-if-changed .
+          
+          echo "✅ Code analysis passed"
+
+      - name: Run Tests
+        run: |
+          echo "🧪 Running Flutter tests..."
+          
+          # Unit and widget tests
+          flutter test --coverage --reporter=github
+          
+          echo "✅ Tests completed"
+
+      - name: Generate Build Info
+        run: |
+          echo "📋 Build Information:" >> build_info.txt
+          echo "- Flutter: $(flutter --version | head -1)" >> build_info.txt
+          echo "- Dart: $(dart --version)" >> build_info.txt
+          echo "- Commit: ${{ github.sha }}" >> build_info.txt
+          echo "- Branch: ${{ needs.setup.outputs.branch }}" >> build_info.txt
+          echo "- Version: ${{ needs.setup.outputs.version }}" >> build_info.txt
+          echo "- Timestamp: $(date)" >> build_info.txt
+
+      - name: Upload Build Info
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info-${{ github.run_number }}
+          path: build_info.txt
+          retention-days: 30
 
   # ⏸️ PRODUCTION APPROVAL (Manual gate for production)
   production-approval:
-    needs: setup
-    if: needs.setup.outputs.is_production == 'true'
+    needs: [setup, build-dependencies]
+    if: needs.setup.outputs.is_production == 'true' && needs.setup.outputs.publish == 'true'
     runs-on: ubuntu-latest
     environment: 
       name: production-approval
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    timeout-minutes: 60  # 1 hour timeout for approval
+    
     steps:
       - name: Production Deployment Approval
         run: |
           echo "🚨 Production deployment requires manual approval"
+          echo "📋 Deployment Details:"
           echo "- Version: ${{ needs.setup.outputs.version }}"
           echo "- Branch: ${{ needs.setup.outputs.branch }}"
+          echo "- Android: ${{ needs.setup.outputs.deploy_android }}"
+          echo "- iOS: ${{ needs.setup.outputs.deploy_ios }}"
+          echo ""
           echo "✅ Approved for production deployment"
 
   # 🤖 ANDROID DEPLOYMENT
-  # deploy-android:
-  #   needs: [setup, production-approval]
-  #   if: |
-  #     always() && 
-  #     needs.setup.outputs.deploy_android == 'true' && 
-  #     (needs.setup.outputs.is_production != 'true' || needs.production-approval.result == 'success')
-  #   uses: ./.github/workflows/android-reusable.yml
-  #   with:
-  #     version: ${{ needs.setup.outputs.version }}
-  #     version_code: ${{ needs.setup.outputs.version_code }}
-  #     branch: ${{ needs.setup.outputs.branch }}
-  #     environment: ${{ needs.setup.outputs.environment }}
-  #   secrets: inherit
-
-  # 🍎 iOS DEPLOYMENT
-  deploy-ios:
-    needs: [setup, production-approval]
+  deploy-android:
+    needs: [setup, build-dependencies, production-approval]
     if: |
       always() && 
-      needs.setup.outputs.deploy_ios == 'true' && 
+      needs.setup.outputs.deploy_android == 'true' && 
+      needs.build-dependencies.result == 'success' &&
       (needs.setup.outputs.is_production != 'true' || needs.production-approval.result == 'success')
-    uses: ./.github/workflows/ios-reusable.yml
+    uses: ./.github/workflows/android-reusable.yml
     with:
+      environment: ${{ needs.setup.outputs.environment }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
       version: ${{ needs.setup.outputs.version }}
       version_code: ${{ needs.setup.outputs.version_code }}
       branch: ${{ needs.setup.outputs.branch }}
+      cache_key: ${{ needs.setup.outputs.cache_key }}
+    secrets: inherit
+
+  # 🍎 iOS DEPLOYMENT
+  deploy-ios:
+    needs: [setup, build-dependencies, production-approval]
+    if: |
+      always() && 
+      needs.setup.outputs.deploy_ios == 'true' && 
+      needs.build-dependencies.result == 'success' &&
+      (needs.setup.outputs.is_production != 'true' || needs.production-approval.result == 'success')
+    uses: ./.github/workflows/ios-build-flutter.yml
+    with:
       environment: ${{ needs.setup.outputs.environment }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+      version: ${{ needs.setup.outputs.version }}
+      version_code: ${{ needs.setup.outputs.version_code }}
+      branch: ${{ needs.setup.outputs.branch }}
+      cache_key: ${{ needs.setup.outputs.cache_key }}
     secrets: inherit
 
   # 📦 CREATE GITHUB RELEASE (Production only)
-  # create-release:
-  #   needs: [setup, deploy-android, deploy-ios]
-  #   if: |
-  #     always() && 
-  #     needs.setup.outputs.is_production == 'true' && 
-  #     (needs.deploy-android.result == 'success' || needs.deploy-android.result == 'skipped') &&
-  #     (needs.deploy-ios.result == 'success' || needs.deploy-ios.result == 'skipped')
-  #   runs-on: ubuntu-latest
-  #   environment: production
+  create-release:
+    needs: [setup, deploy-android, deploy-ios]
+    if: |
+      always() && 
+      needs.setup.outputs.is_production == 'true' && 
+      needs.setup.outputs.publish == 'true' &&
+      (needs.deploy-android.result == 'success' || needs.deploy-android.result == 'skipped') &&
+      (needs.deploy-ios.result == 'success' || needs.deploy-ios.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
     
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  #     - name: Generate Release Notes
-  #       id: release_notes
-  #       run: |
-  #         VERSION="${{ needs.setup.outputs.version }}"
-          
-  #         # Generate changelog from commits
-  #         echo "## 🚀 Release v$VERSION" > release_notes.md
-  #         echo "" >> release_notes.md
-  #         echo "### 📱 Platform Availability" >> release_notes.md
-          
-  #         if [ "${{ needs.deploy-android.result }}" = "success" ]; then
-  #           echo "- **Android**: ✅ Google Play Store" >> release_notes.md
-  #         fi
-          
-  #         if [ "${{ needs.deploy-ios.result }}" = "success" ]; then
-  #           echo "- **iOS**: ✅ App Store" >> release_notes.md
-  #         fi
-          
-  #         echo "" >> release_notes.md
-  #         echo "### 📝 Changes" >> release_notes.md
-          
-  #         # Get recent commits
-  #         git log --oneline --no-merges -10 --pretty="- %s" >> release_notes.md
-          
-  #         echo "" >> release_notes.md
-  #         echo "*Released on $(date)*" >> release_notes.md
+      - name: Download Build Info
+        uses: actions/download-artifact@v4
+        with:
+          name: build-info-${{ github.run_number }}
 
-  #     - name: Create GitHub Release
-  #       uses: actions/create-release@v1
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       with:
-  #         tag_name: v${{ needs.setup.outputs.version }}
-  #         release_name: 'Flutter v${{ needs.setup.outputs.version }}'
-  #         body_path: release_notes.md
-  #         draft: false
-  #         prerelease: false
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          VERSION="${{ needs.setup.outputs.version }}"
+          
+          # Generate comprehensive changelog
+          echo "## 🚀 Flutter Release v$VERSION" > release_notes.md
+          echo "" >> release_notes.md
+          
+          # Add build information
+          echo "### 📋 Build Information" >> release_notes.md
+          cat build_info.txt | sed 's/^/- /' >> release_notes.md
+          echo "" >> release_notes.md
+          
+          # Platform availability
+          echo "### 📱 Platform Availability" >> release_notes.md
+          
+          if [ "${{ needs.deploy-android.result }}" = "success" ]; then
+            echo "- **Android**: ✅ Google Play Store" >> release_notes.md
+          elif [ "${{ needs.setup.outputs.deploy_android }}" = "true" ]; then
+            echo "- **Android**: ❌ Deployment failed" >> release_notes.md
+          else
+            echo "- **Android**: ⏭️ Skipped (no changes)" >> release_notes.md
+          fi
+          
+          if [ "${{ needs.deploy-ios.result }}" = "success" ]; then
+            echo "- **iOS**: ✅ App Store / TestFlight" >> release_notes.md
+          elif [ "${{ needs.setup.outputs.deploy_ios }}" = "true" ]; then
+            echo "- **iOS**: ❌ Deployment failed" >> release_notes.md
+          else
+            echo "- **iOS**: ⏭️ Skipped (no changes)" >> release_notes.md
+          fi
+          
+          echo "" >> release_notes.md
+          
+          # Recent changes
+          echo "### 📝 Recent Changes" >> release_notes.md
+          
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            git log $LAST_TAG..HEAD --oneline --no-merges --pretty="- %s (%h)" | head -20 >> release_notes.md
+          else
+            git log --oneline --no-merges -10 --pretty="- %s (%h)" >> release_notes.md
+          fi
+          
+          echo "" >> release_notes.md
+          echo "### 🔗 Links" >> release_notes.md
+          echo "- [Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> release_notes.md
+          echo "- [Commit](https://github.com/${{ github.repository }}/commit/${{ github.sha }})" >> release_notes.md
+          
+          echo "" >> release_notes.md
+          echo "*Released on $(date)*" >> release_notes.md
 
-  # # 📊 DEPLOYMENT SUMMARY
-  # deployment-summary:
-  #   needs: [setup, deploy-android, deploy-ios, create-release]
-  #   if: always()
-  #   runs-on: ubuntu-latest
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ needs.setup.outputs.version }}
+          release_name: 'Flutter v${{ needs.setup.outputs.version }}'
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+
+  # 📊 DEPLOYMENT SUMMARY
+  deployment-summary:
+    needs: [setup, build-dependencies, deploy-android, deploy-ios, create-release]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     
-  #   steps:
-  #     - name: Generate Summary
-  #       run: |
-  #         echo "## 📊 Deployment Summary" >> $GITHUB_STEP_SUMMARY
-  #         echo "" >> $GITHUB_STEP_SUMMARY
-  #         echo "### 🎯 Target Information" >> $GITHUB_STEP_SUMMARY
-  #         echo "- **Version:** ${{ needs.setup.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-  #         echo "- **Branch:** ${{ needs.setup.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
-  #         echo "- **Environment:** ${{ needs.setup.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
-  #         echo "" >> $GITHUB_STEP_SUMMARY
+    steps:
+      - name: Calculate Duration
+        id: duration
+        run: |
+          START_TIME="${{ github.event.head_commit.timestamp || github.event.created_at }}"
+          END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           
-  #         echo "### 📱 Platform Results" >> $GITHUB_STEP_SUMMARY
+          # Convert to seconds (simplified)
+          DURATION="N/A"
           
-  #         # Android status
-  #         ANDROID_STATUS="${{ needs.deploy-android.result }}"
-  #         case "$ANDROID_STATUS" in
-  #           "success") echo "- **Android:** ✅ Deployed successfully" >> $GITHUB_STEP_SUMMARY ;;
-  #           "skipped") echo "- **Android:** ⏭️ Skipped (no changes)" >> $GITHUB_STEP_SUMMARY ;;
-  #           "failure") echo "- **Android:** ❌ Deployment failed" >> $GITHUB_STEP_SUMMARY ;;
-  #           *) echo "- **Android:** ⏸️ Not triggered" >> $GITHUB_STEP_SUMMARY ;;
-  #         esac
-          
-  #         # iOS status  
-  #         IOS_STATUS="${{ needs.deploy-ios.result }}"
-  #         case "$IOS_STATUS" in
-  #           "success") echo "- **iOS:** ✅ Deployed successfully" >> $GITHUB_STEP_SUMMARY ;;
-  #           "skipped") echo "- **iOS:** ⏭️ Skipped (no changes)" >> $GITHUB_STEP_SUMMARY ;;
-  #           "failure") echo "- **iOS:** ❌ Deployment failed" >> $GITHUB_STEP_SUMMARY ;;
-  #           *) echo "- **iOS:** ⏸️ Not triggered" >> $GITHUB_STEP_SUMMARY ;;
-  #         esac
-          
-  #         # Release status
-  #         if [ "${{ needs.setup.outputs.is_production }}" = "true" ]; then
-  #           RELEASE_STATUS="${{ needs.create-release.result }}"
-  #           case "$RELEASE_STATUS" in
-  #             "success") echo "- **GitHub Release:** ✅ Created" >> $GITHUB_STEP_SUMMARY ;;
-  #             *) echo "- **GitHub Release:** ❌ Failed" >> $GITHUB_STEP_SUMMARY ;;
-  #           esac
-  #         fi
-          
-  #         echo "" >> $GITHUB_STEP_SUMMARY
-  #         echo "*Deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+          echo "duration=$DURATION" >> $GITHUB_OUTPUT
+          echo "⏱️ Pipeline duration: $DURATION"
 
-  #     - name: Final Status Check
-  #       run: |
-  #         ANDROID_OK="${{ needs.deploy-android.result }}"
-  #         IOS_OK="${{ needs.deploy-ios.result }}"
+      - name: Generate Comprehensive Summary
+        run: |
+          echo "## 📊 Flutter CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-  #         # Check if any required deployment failed
-  #         if [ "$ANDROID_OK" = "failure" ] || [ "$IOS_OK" = "failure" ]; then
-  #           echo "❌ Some deployments failed"
-  #           exit 1
-  #         else
-  #           echo "✅ All deployments completed successfully"
-  #         fi
+          # Header information
+          echo "### 🎯 Pipeline Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** ${{ needs.setup.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ needs.setup.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ needs.setup.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** [\`${{ github.sha }}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Job results
+          echo "### 🔄 Job Results" >> $GITHUB_STEP_SUMMARY
+          
+          # Build dependencies
+          DEPS_STATUS="${{ needs.build-dependencies.result }}"
+          case "$DEPS_STATUS" in
+            "success") echo "- **Dependencies & Tests:** ✅ Passed" >> $GITHUB_STEP_SUMMARY ;;
+            "failure") echo "- **Dependencies & Tests:** ❌ Failed" >> $GITHUB_STEP_SUMMARY ;;
+            "skipped") echo "- **Dependencies & Tests:** ⏭️ Skipped" >> $GITHUB_STEP_SUMMARY ;;
+            *) echo "- **Dependencies & Tests:** ⏸️ Not run" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+          
+          # Production approval
+          if [ "${{ needs.setup.outputs.is_production }}" = "true" ]; then
+            APPROVAL_STATUS="${{ needs.production-approval.result }}"
+            case "$APPROVAL_STATUS" in
+              "success") echo "- **Production Approval:** ✅ Approved" >> $GITHUB_STEP_SUMMARY ;;
+              "failure") echo "- **Production Approval:** ❌ Rejected" >> $GITHUB_STEP_SUMMARY ;;
+              *) echo "- **Production Approval:** ⏸️ Pending" >> $GITHUB_STEP_SUMMARY ;;
+            esac
+          fi
+          
+          # Android deployment
+          ANDROID_STATUS="${{ needs.deploy-android.result }}"
+          case "$ANDROID_STATUS" in
+            "success") echo "- **Android Deployment:** ✅ Successful" >> $GITHUB_STEP_SUMMARY ;;
+            "skipped") echo "- **Android Deployment:** ⏭️ Skipped (no changes)" >> $GITHUB_STEP_SUMMARY ;;
+            "failure") echo "- **Android Deployment:** ❌ Failed" >> $GITHUB_STEP_SUMMARY ;;
+            *) echo "- **Android Deployment:** ⏸️ Not triggered" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+          
+          # iOS deployment  
+          IOS_STATUS="${{ needs.deploy-ios.result }}"
+          case "$IOS_STATUS" in
+            "success") echo "- **iOS Deployment:** ✅ Successful" >> $GITHUB_STEP_SUMMARY ;;
+            "skipped") echo "- **iOS Deployment:** ⏭️ Skipped (no changes)" >> $GITHUB_STEP_SUMMARY ;;
+            "failure") echo "- **iOS Deployment:** ❌ Failed" >> $GITHUB_STEP_SUMMARY ;;
+            *) echo "- **iOS Deployment:** ⏸️ Not triggered" >> $GITHUB_STEP_SUMMARY ;;
+          esac
+          
+          # Release status
+          if [ "${{ needs.setup.outputs.is_production }}" = "true" ] && [ "${{ needs.setup.outputs.publish }}" = "true" ]; then
+            RELEASE_STATUS="${{ needs.create-release.result }}"
+            case "$RELEASE_STATUS" in
+              "success") echo "- **GitHub Release:** ✅ Created" >> $GITHUB_STEP_SUMMARY ;;
+              "failure") echo "- **GitHub Release:** ❌ Failed" >> $GITHUB_STEP_SUMMARY ;;
+              *) echo "- **GitHub Release:** ⏸️ Pending" >> $GITHUB_STEP_SUMMARY ;;
+            esac
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Performance metrics
+          echo "### ⚡ Performance Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cache Key:** \`${{ needs.setup.outputs.cache_key }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Jobs:** $(echo '${{ toJSON(needs) }}' | jq 'length')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Flutter Version:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Links
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Quick Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [📱 Android Workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [🍎 iOS Workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.setup.outputs.is_production }}" = "true" ]; then
+            echo "- [📦 Releases](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Pipeline completed on $(date)*" >> $GITHUB_STEP_SUMMARY
+
+      - name: Final Status Check
+        run: |
+          echo "🔍 Final pipeline status check..."
+          
+          OVERALL_SUCCESS="true"
+          
+          # Check required job results
+          DEPS_OK="${{ needs.build-dependencies.result }}"
+          ANDROID_OK="${{ needs.deploy-android.result }}"
+          IOS_OK="${{ needs.deploy-ios.result }}"
+          
+          # Dependencies must succeed
+          if [ "$DEPS_OK" != "success" ]; then
+            echo "❌ Dependencies job failed"
+            OVERALL_SUCCESS="false"
+          fi
+          
+          # Check deployments (success or skipped is OK)
+          if [ "${{ needs.setup.outputs.deploy_android }}" = "true" ] && [ "$ANDROID_OK" = "failure" ]; then
+            echo "❌ Android deployment failed"
+            OVERALL_SUCCESS="false"
+          fi
+          
+          if [ "${{ needs.setup.outputs.deploy_ios }}" = "true" ] && [ "$IOS_OK" = "failure" ]; then
+            echo "❌ iOS deployment failed"
+            OVERALL_SUCCESS="false"
+          fi
+          
+          # Final result
+          if [ "$OVERALL_SUCCESS" = "true" ]; then
+            echo "✅ All critical jobs completed successfully"
+            echo "🎉 Pipeline completed successfully!"
+          else
+            echo "❌ Pipeline failed - check individual job results"
+            exit 1
+          fi
