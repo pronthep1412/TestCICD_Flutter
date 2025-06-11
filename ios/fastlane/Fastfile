@@ -23,9 +23,9 @@ platform :ios do
     # Setup certificates and provisioning profiles with Match
     match(
       type: "appstore",
-      readonly: false,
-      git_url: ENV['MATCH_GIT_URL'],
-      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+      readonly: true,
+      # git_url: ENV['MATCH_GIT_URL'],
+      # app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
     )
     
     # Update version numbers
@@ -206,9 +206,9 @@ platform :ios do
     # Setup certificates
     match(
       type: "appstore",
-      readonly: false,
-      git_url: ENV['MATCH_GIT_URL'],
-      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+      readonly: true,
+      # git_url: ENV['MATCH_GIT_URL'],
+      # app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
     )
     
     # Update version
@@ -234,9 +234,9 @@ platform :ios do
   lane :setup_certificates do
     match(
       type: "appstore",
-      readonly: false,
-      git_url: ENV['MATCH_GIT_URL'],
-      app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
+      readonly: true,
+      # git_url: ENV['MATCH_GIT_URL'],
+      # app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
     )
     UI.success("✅ Certificates setup completed!")
   end
