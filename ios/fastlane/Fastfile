@@ -99,7 +99,7 @@ platform :ios do
   
   # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
   private_lane :setup_certificates_with_api_key do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
+    readonly_mode = options[:readonly] || false  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
     cert_type = options[:type] || "appstore"
     
     UI.message("🔐 Setting up certificates...")
@@ -225,7 +225,7 @@ platform :ios do
     UI.message("📋 Version: #{version} (#{build_number})")
     
     # 🔧 Setup certificates พร้อม API key (ใช้ readonly เพราะมี cert แล้ว)
-    setup_certificates_with_api_key(readonly: true)
+    setup_certificates_with_api_key(readonly: false)
     
     # Update version
     increment_version_number(version_number: version)
@@ -248,7 +248,7 @@ platform :ios do
   
   desc "Setup certificates only"
   lane :setup_certificates do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true
+    readonly_mode = options[:readonly] || false  # เปลี่ยนกลับเป็น true
     cert_type = options[:type] || "appstore"
     
     # 🔧 ใช้ helper method ใหม่
