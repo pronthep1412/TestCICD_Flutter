@@ -1,4 +1,4 @@
-# ios/fastlane/Fastfile - Updated with API key object support for ALL actions
+# ios/fastlane/Fastfile - แก้ไข readonly mode
 default_platform(:ios)
 
 platform :ios do
@@ -17,8 +17,9 @@ platform :ios do
     UI.message("🎯 Target: #{target}")
     UI.message("📋 Version: #{version} (#{build_number})")
     
-    # 🔧 Setup certificates and provisioning profiles with Match + API Key
-    setup_certificates_with_api_key
+    # 🔧 Setup certificates และ provisioning profiles พร้อม API Key
+    # ใช้ readonly: false เพื่อให้สร้าง certificate ได้ถ้าไม่มี
+    setup_certificates_with_api_key(readonly: false)
     
     # Update version numbers
     increment_version_number(version_number: version)
@@ -97,9 +98,10 @@ platform :ios do
     end
   end
   
-  # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
+  # 🔧 Helper method สำหรับ setup certificates พร้อม API key
   private_lane :setup_certificates_with_api_key do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
+    # 🚀 เปลี่ยนเป็น false เพื่อให้สร้าง certificate ได้
+    readonly_mode = options[:readonly] || false  # ✅ เปลี่ยนจาก true เป็น false
     cert_type = options[:type] || "appstore"
     
     UI.message("🔐 Setting up certificates...")
@@ -224,8 +226,8 @@ platform :ios do
     UI.message("🔨 Building iOS app...")
     UI.message("📋 Version: #{version} (#{build_number})")
     
-    # 🔧 Setup certificates พร้อม API key (ใช้ readonly เพราะมี cert แล้ว)
-    setup_certificates_with_api_key(readonly: true)
+    # 🔧 Setup certificates พร้อม API key 
+    setup_certificates_with_api_key(readonly: false)  # ✅ ใช้ false
     
     # Update version
     increment_version_number(version_number: version)
@@ -248,7 +250,7 @@ platform :ios do
   
   desc "Setup certificates only"
   lane :setup_certificates do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true
+    readonly_mode = options[:readonly] || false  # ✅ เปลี่ยนเป็น false
     cert_type = options[:type] || "appstore"
     
     # 🔧 ใช้ helper method ใหม่
