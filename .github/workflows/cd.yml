@@ -342,22 +342,22 @@ jobs:
           echo "✅ Approved for production deployment"
 
   # 🤖 ANDROID DEPLOYMENT
-  # deploy-android:
-  #   needs: [setup, build-dependencies, production-approval]
-  #   if: |
-  #     always() && 
-  #     needs.setup.outputs.deploy_android == 'true' && 
-  #     needs.build-dependencies.result == 'success' &&
-  #     (needs.setup.outputs.is_production != 'true' || needs.production-approval.result == 'success')
-  #   uses: ./.github/workflows/android-reusable.yml
-  #   with:
-  #     environment: ${{ needs.setup.outputs.environment }}
-  #     publish: ${{ needs.setup.outputs.publish == 'true' }}
-  #     version: ${{ needs.setup.outputs.version }}
-  #     version_code: ${{ needs.setup.outputs.version_code }}
-  #     branch: ${{ needs.setup.outputs.branch }}
-  #     cache_key: ${{ needs.setup.outputs.cache_key }}
-  #   secrets: inherit
+  deploy-android:
+    needs: [setup, build-dependencies, production-approval]
+    if: |
+      always() && 
+      needs.setup.outputs.deploy_android == 'true' && 
+      needs.build-dependencies.result == 'success' &&
+      (needs.setup.outputs.is_production != 'true' || needs.production-approval.result == 'success')
+    uses: ./.github/workflows/android-reusable.yml
+    with:
+      environment: ${{ needs.setup.outputs.environment }}
+      publish: ${{ needs.setup.outputs.publish == 'true' }}
+      version: ${{ needs.setup.outputs.version }}
+      version_code: ${{ needs.setup.outputs.version_code }}
+      branch: ${{ needs.setup.outputs.branch }}
+      cache_key: ${{ needs.setup.outputs.cache_key }}
+    secrets: inherit
 
   # 🍎 iOS DEPLOYMENT
   deploy-ios:
@@ -378,102 +378,102 @@ jobs:
     secrets: inherit
 
   # 📦 CREATE GITHUB RELEASE (Production only)
-  # create-release:
-  #   needs: [setup, deploy-android, deploy-ios]
-  #   if: |
-  #     always() && 
-  #     needs.setup.outputs.is_production == 'true' && 
-  #     needs.setup.outputs.publish == 'true' &&
-  #     (needs.deploy-android.result == 'success' || needs.deploy-android.result == 'skipped') &&
-  #     (needs.deploy-ios.result == 'success' || needs.deploy-ios.result == 'skipped')
-  #   runs-on: ubuntu-latest
-  #   environment: production
-  #   timeout-minutes: 5
+  create-release:
+    needs: [setup, deploy-android, deploy-ios]
+    if: |
+      always() && 
+      needs.setup.outputs.is_production == 'true' && 
+      needs.setup.outputs.publish == 'true' &&
+      (needs.deploy-android.result == 'success' || needs.deploy-android.result == 'skipped') &&
+      (needs.deploy-ios.result == 'success' || needs.deploy-ios.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
     
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  #     - name: Download Build Info
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: build-info-${{ github.run_number }}
+      - name: Download Build Info
+        uses: actions/download-artifact@v4
+        with:
+          name: build-info-${{ github.run_number }}
 
-  #     - name: Generate Release Notes
-  #       id: release_notes
-  #       run: |
-  #         VERSION="${{ needs.setup.outputs.version }}"
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          VERSION="${{ needs.setup.outputs.version }}"
           
-  #         # Generate comprehensive changelog
-  #         echo "## 🚀 Flutter Release v$VERSION" > release_notes.md
-  #         echo "" >> release_notes.md
+          # Generate comprehensive changelog
+          echo "## 🚀 Flutter Release v$VERSION" > release_notes.md
+          echo "" >> release_notes.md
           
-  #         # Add build information
-  #         echo "### 📋 Build Information" >> release_notes.md
-  #         cat build_info.txt | sed 's/^/- /' >> release_notes.md
-  #         echo "" >> release_notes.md
+          # Add build information
+          echo "### 📋 Build Information" >> release_notes.md
+          cat build_info.txt | sed 's/^/- /' >> release_notes.md
+          echo "" >> release_notes.md
           
-  #         # Platform availability
-  #         echo "### 📱 Platform Availability" >> release_notes.md
+          # Platform availability
+          echo "### 📱 Platform Availability" >> release_notes.md
           
-  #         if [ "${{ needs.deploy-android.result }}" = "success" ]; then
-  #           echo "- **Android**: ✅ Google Play Store" >> release_notes.md
-  #         elif [ "${{ needs.setup.outputs.deploy_android }}" = "true" ]; then
-  #           echo "- **Android**: ❌ Deployment failed" >> release_notes.md
-  #         else
-  #           echo "- **Android**: ⏭️ Skipped (no changes)" >> release_notes.md
-  #         fi
+          if [ "${{ needs.deploy-android.result }}" = "success" ]; then
+            echo "- **Android**: ✅ Google Play Store" >> release_notes.md
+          elif [ "${{ needs.setup.outputs.deploy_android }}" = "true" ]; then
+            echo "- **Android**: ❌ Deployment failed" >> release_notes.md
+          else
+            echo "- **Android**: ⏭️ Skipped (no changes)" >> release_notes.md
+          fi
           
-  #         if [ "${{ needs.deploy-ios.result }}" = "success" ]; then
-  #           echo "- **iOS**: ✅ App Store / TestFlight" >> release_notes.md
-  #         elif [ "${{ needs.setup.outputs.deploy_ios }}" = "true" ]; then
-  #           echo "- **iOS**: ❌ Deployment failed" >> release_notes.md
-  #         else
-  #           echo "- **iOS**: ⏭️ Skipped (no changes)" >> release_notes.md
-  #         fi
+          if [ "${{ needs.deploy-ios.result }}" = "success" ]; then
+            echo "- **iOS**: ✅ App Store / TestFlight" >> release_notes.md
+          elif [ "${{ needs.setup.outputs.deploy_ios }}" = "true" ]; then
+            echo "- **iOS**: ❌ Deployment failed" >> release_notes.md
+          else
+            echo "- **iOS**: ⏭️ Skipped (no changes)" >> release_notes.md
+          fi
           
-  #         echo "" >> release_notes.md
+          echo "" >> release_notes.md
           
-  #         # Recent changes
-  #         echo "### 📝 Recent Changes" >> release_notes.md
+          # Recent changes
+          echo "### 📝 Recent Changes" >> release_notes.md
           
-  #         # Get commits since last tag
-  #         LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-  #         if [ -n "$LAST_TAG" ]; then
-  #           git log $LAST_TAG..HEAD --oneline --no-merges --pretty="- %s (%h)" | head -20 >> release_notes.md
-  #         else
-  #           git log --oneline --no-merges -10 --pretty="- %s (%h)" >> release_notes.md
-  #         fi
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            git log $LAST_TAG..HEAD --oneline --no-merges --pretty="- %s (%h)" | head -20 >> release_notes.md
+          else
+            git log --oneline --no-merges -10 --pretty="- %s (%h)" >> release_notes.md
+          fi
           
-  #         echo "" >> release_notes.md
-  #         echo "### 🔗 Links" >> release_notes.md
-  #         echo "- [Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> release_notes.md
-  #         echo "- [Commit](https://github.com/${{ github.repository }}/commit/${{ github.sha }})" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### 🔗 Links" >> release_notes.md
+          echo "- [Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> release_notes.md
+          echo "- [Commit](https://github.com/${{ github.repository }}/commit/${{ github.sha }})" >> release_notes.md
           
-  #         echo "" >> release_notes.md
-  #         echo "*Released on $(date)*" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "*Released on $(date)*" >> release_notes.md
 
-  #     - name: Create GitHub Release
-  #       uses: actions/create-release@v1
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       with:
-  #         tag_name: v${{ needs.setup.outputs.version }}
-  #         release_name: 'Flutter v${{ needs.setup.outputs.version }}'
-  #         body_path: release_notes.md
-  #         draft: false
-  #         prerelease: false
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ needs.setup.outputs.version }}
+          release_name: 'Flutter v${{ needs.setup.outputs.version }}'
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
 
-  # # 📊 DEPLOYMENT SUMMARY
-  # deployment-summary:
-  #   needs: [setup, build-dependencies, deploy-android, deploy-ios, create-release]
-  #   if: always()
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 5
+  # 📊 DEPLOYMENT SUMMARY
+  deployment-summary:
+    needs: [setup, build-dependencies, deploy-android, deploy-ios, create-release]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     
-  #   steps:
+    steps:
       - name: Calculate Duration
         id: duration
         run: |
