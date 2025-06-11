@@ -85,7 +85,6 @@ jobs:
         uses: actions/setup-node@v4  # 🔄 Updated from v3
         with:
           node-version: ${{ env.NODE_VERSION }}  # 🔄 Use env variable
-          cache: "yarn"
 
       # 🚀 Smart dependency handling - iOS ต้องมี node_modules
       - name: Restore Dependencies Cache
