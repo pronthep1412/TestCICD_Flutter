@@ -1,13 +1,10 @@
-# ios/fastlane/Fastfile - Updated with API key object support
+# ios/fastlane/Fastfile - Updated with API key object support for ALL actions
 default_platform(:ios)
 
 platform :ios do
   before_all do
     ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
     setup_ci if ENV['CI']
-    
-    # ✅ ไม่ต้อง setup app_store_connect_api_key ที่นี่แล้ว
-    # จะสร้าง API key object ใน each lane แทน
   end
 
   desc "Deploy to App Store Connect"
@@ -20,13 +17,8 @@ platform :ios do
     UI.message("🎯 Target: #{target}")
     UI.message("📋 Version: #{version} (#{build_number})")
     
-    # Setup certificates and provisioning profiles with Match
-    match(
-      type: "appstore",
-      readonly: false,
-      # git_url: ENV['MATCH_GIT_URL'],
-      # app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
-    )
+    # 🔧 Setup certificates and provisioning profiles with Match + API Key
+    setup_certificates_with_api_key
     
     # Update version numbers
     increment_version_number(version_number: version)
@@ -103,6 +95,35 @@ platform :ios do
       UI.message("Missing: #{missing_items.join(', ')}")
       return nil
     end
+  end
+  
+  # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
+  private_lane :setup_certificates_with_api_key do |options|
+    readonly_mode = options[:readonly] || true  # ใช้ readonly เป็น default เพื่อความปลอดภัย
+    cert_type = options[:type] || "appstore"
+    
+    UI.message("🔐 Setting up certificates...")
+    UI.message("   Type: #{cert_type}")
+    UI.message("   Readonly: #{readonly_mode}")
+    
+    # สร้าง match options
+    match_options = {
+      type: cert_type,
+      readonly: readonly_mode
+    }
+    
+    # เพิ่ม API key ถ้ามี
+    api_key_object = create_api_key_object
+    if api_key_object
+      match_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for Match authentication")
+    else
+      UI.message("⚠️ Using traditional auth for Match (requires FASTLANE_PASSWORD)")
+    end
+    
+    # เรียกใช้ match
+    match(match_options)
+    UI.success("✅ Certificates setup completed!")
   end
   
   # 🔧 Private lanes for different deployment targets with API key support
@@ -203,13 +224,8 @@ platform :ios do
     UI.message("🔨 Building iOS app...")
     UI.message("📋 Version: #{version} (#{build_number})")
     
-    # Setup certificates
-    match(
-      type: "appstore",
-      readonly: false,
-      # git_url: ENV['MATCH_GIT_URL'],
-      # app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
-    )
+    # 🔧 Setup certificates พร้อม API key
+    setup_certificates_with_api_key(readonly: true)
     
     # Update version
     increment_version_number(version_number: version)
@@ -231,14 +247,12 @@ platform :ios do
   end
   
   desc "Setup certificates only"
-  lane :setup_certificates do
-    match(
-      type: "appstore",
-      readonly: false,
-      # git_url: ENV['MATCH_GIT_URL'],
-      # app_identifier: CredentialsManager::AppfileConfig.try_fetch_value(:app_identifier)
-    )
-    UI.success("✅ Certificates setup completed!")
+  lane :setup_certificates do |options|
+    readonly_mode = options[:readonly] || true
+    cert_type = options[:type] || "appstore"
+    
+    # 🔧 ใช้ helper method ใหม่
+    setup_certificates_with_api_key(readonly: readonly_mode, type: cert_type)
   end
   
   # 🔧 Submit for review lane with API key support
