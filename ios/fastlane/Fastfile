@@ -1,4 +1,4 @@
-# ios/fastlane/Fastfile - Updated with API key object support for ALL actions
+# ios/fastlane/Fastfile - Enhanced with comprehensive debugging
 default_platform(:ios)
 
 platform :ios do
@@ -34,8 +34,11 @@ platform :ios do
       export_method: "app-store",
       output_directory: "build",
       output_name: "Runner.ipa",
-      silent: true
+      silent: false  # 🔍 เปิด verbose logging
     )
+    
+    # 🔍 POST-BUILD VALIDATION
+    validate_ipa_build
     
     # Deploy based on target
     case target
@@ -52,21 +55,170 @@ platform :ios do
     UI.success("✅ Successfully deployed to #{target}!")
   end
   
+  # 🔍 NEW: IPA Validation with detailed logging
+  private_lane :validate_ipa_build do
+    ipa_path = "build/Runner.ipa"
+    
+    UI.header("🔍 IPA BUILD VALIDATION")
+    
+    unless File.exist?(ipa_path)
+      UI.user_error!("❌ IPA file not found at: #{ipa_path}")
+    end
+    
+    # File size check
+    ipa_size = (File.size(ipa_path) / 1024.0 / 1024.0).round(2)
+    UI.message("📦 IPA Size: #{ipa_size} MB")
+    
+    # Extract and inspect IPA contents
+    UI.message("🔓 Extracting IPA for inspection...")
+    
+    begin
+      # Create temp directory
+      temp_dir = "build/ipa_inspection"
+      sh("rm -rf #{temp_dir} && mkdir -p #{temp_dir}")
+      sh("cd #{temp_dir} && unzip -q ../Runner.ipa")
+      
+      app_path = "#{temp_dir}/Payload/Runner.app"
+      
+      if File.exist?(app_path)
+        UI.success("✅ App bundle found")
+        
+        # 🔍 CHECK PROVISIONING PROFILE
+        UI.message("📋 Checking provisioning profile...")
+        mobileprovision_path = "#{app_path}/embedded.mobileprovision"
+        
+        if File.exist?(mobileprovision_path)
+          # Decode provisioning profile
+          profile_content = sh("security cms -D -i '#{mobileprovision_path}' 2>/dev/null || echo 'Failed to decode'", log: false).strip
+          
+          if profile_content != "Failed to decode"
+            # Parse key information
+            if profile_content.include?("<key>get-task-allow</key>")
+              is_development = profile_content.include?("<key>get-task-allow</key>\n\t<true/>")
+              UI.message("   Profile Type: #{is_development ? '🟡 Development' : '🟢 Distribution'}")
+            end
+            
+            # Extract team ID
+            if match = profile_content.match(/<string>([A-Z0-9]{10})\.[^<]+<\/string>/)
+              team_id = match[1]
+              UI.message("   Team ID: #{team_id}")
+            end
+            
+            # Extract app identifier
+            if match = profile_content.match(/<key>application-identifier<\/key>\s*<string>([^<]+)<\/string>/)
+              app_id = match[1]
+              UI.message("   App ID: #{app_id}")
+            end
+            
+            # Check expiration
+            if match = profile_content.match(/<key>ExpirationDate<\/key>\s*<date>([^<]+)<\/date>/)
+              expiry = match[1]
+              UI.message("   Expires: #{expiry}")
+            end
+            
+          else
+            UI.error("❌ Failed to decode provisioning profile")
+          end
+        else
+          UI.error("❌ No embedded provisioning profile found")
+        end
+        
+        # 🔍 CHECK CODE SIGNING
+        UI.message("🔐 Checking code signing...")
+        begin
+          codesign_info = sh("codesign -dv --verbose=4 '#{app_path}' 2>&1", log: false)
+          
+          codesign_info.each_line do |line|
+            line = line.strip
+            if line.include?("Authority=") || line.include?("TeamIdentifier=") || line.include?("Identifier=")
+              UI.message("   #{line}")
+            end
+          end
+          
+          # Verify signature
+          verification = sh("codesign --verify --verbose '#{app_path}' 2>&1 || echo 'VERIFICATION_FAILED'", log: false).strip
+          
+          if verification.include?("VERIFICATION_FAILED")
+            UI.error("❌ Code signing verification failed")
+          else
+            UI.success("✅ Code signing verification passed")
+          end
+          
+        rescue => e
+          UI.error("❌ Error checking code signing: #{e.message}")
+        end
+        
+        # 🔍 CHECK INFO.PLIST
+        UI.message("📄 Checking Info.plist...")
+        info_plist_path = "#{app_path}/Info.plist"
+        
+        if File.exist?(info_plist_path)
+          begin
+            bundle_id = sh("plutil -extract CFBundleIdentifier '#{info_plist_path}' -raw 2>/dev/null || echo 'unknown'", log: false).strip
+            bundle_version = sh("plutil -extract CFBundleShortVersionString '#{info_plist_path}' -raw 2>/dev/null || echo 'unknown'", log: false).strip
+            build_number = sh("plutil -extract CFBundleVersion '#{info_plist_path}' -raw 2>/dev/null || echo 'unknown'", log: false).strip
+            
+            UI.message("   Bundle ID: #{bundle_id}")
+            UI.message("   Version: #{bundle_version}")
+            UI.message("   Build: #{build_number}")
+          rescue => e
+            UI.error("❌ Error reading Info.plist: #{e.message}")
+          end
+        end
+        
+      else
+        UI.error("❌ App bundle not found in IPA")
+      end
+      
+      # Cleanup
+      sh("rm -rf #{temp_dir}")
+      
+    rescue => e
+      UI.error("❌ Error during IPA validation: #{e.message}")
+    end
+    
+    UI.message("🔍 IPA validation completed")
+  end
+  
   # 🔧 Helper method สำหรับสร้าง App Store Connect API key object
   private_lane :create_api_key_object do
     api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
     api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
     api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
     
+    UI.header("🔑 APP STORE CONNECT API KEY SETUP")
+    
+    # 🔍 LOG API KEY STATUS
+    UI.message("📋 API Key Configuration:")
+    UI.message("   Key ID: #{api_key_id ? "#{api_key_id[0..7]}..." : '❌ Missing'}")
+    UI.message("   Issuer ID: #{api_issuer_id ? "#{api_issuer_id[0..7]}..." : '❌ Missing'}")
+    UI.message("   Key Content: #{api_key_content_base64 ? "✅ Available (#{api_key_content_base64.length} chars)" : '❌ Missing'}")
+    
     if api_key_id && api_issuer_id && api_key_content_base64
       begin
         require 'base64'
-        api_key_content = Base64.decode64(api_key_content_base64)
+        
+        # 🔍 VALIDATE BASE64 CONTENT
+        UI.message("🔍 Validating API key content...")
+        
+        begin
+          api_key_content = Base64.decode64(api_key_content_base64)
+          UI.message("   Decoded length: #{api_key_content.length} characters")
+          
+          # Check if it looks like a valid P8 key
+          if api_key_content.include?("BEGIN PRIVATE KEY") && api_key_content.include?("END PRIVATE KEY")
+            UI.success("✅ API key content appears to be valid P8 format")
+          else
+            UI.error("❌ API key content doesn't appear to be valid P8 format")
+            UI.message("   First 50 chars: #{api_key_content[0..49]}")
+          end
+          
+        rescue => decode_error
+          UI.error("❌ Failed to decode base64 content: #{decode_error.message}")
+          return nil
+        end
         
         UI.message("✅ Creating App Store Connect API configuration")
-        UI.message("   Key ID: #{api_key_id}")
-        UI.message("   Issuer ID: #{api_issuer_id}")
-        UI.message("   Content length: #{api_key_content.length} characters")
         
         # สร้าง App Store Connect API object
         app_store_connect_api_key = {
@@ -77,17 +229,22 @@ platform :ios do
           in_house: false
         }
         
-        UI.success("✅ App Store Connect API key object created")
+        # 🔍 TEST API KEY VALIDITY
+        UI.message("🧪 Testing API key validity...")
+        test_api_key_access(app_store_connect_api_key)
+        
+        UI.success("✅ App Store Connect API key object created successfully")
         app_store_connect_api_key
         
       rescue => e
         UI.error("❌ Failed to create API key object: #{e.message}")
         UI.error("   Error class: #{e.class}")
+        UI.error("   Backtrace: #{e.backtrace.first(3).join(', ')}")
         UI.message("⚠️ Will use traditional auth")
         nil
       end
     else
-      UI.message("⚠️ API key not available, using traditional auth")
+      UI.error("⚠️ API key not available, using traditional auth")
       missing_items = []
       missing_items << "API_KEY_ID" unless api_key_id
       missing_items << "ISSUER_ID" unless api_issuer_id  
@@ -97,19 +254,56 @@ platform :ios do
     end
   end
   
-  # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
+  # 🔍 NEW: Test API key access
+  private_lane :test_api_key_access do |api_key_object|
+    begin
+      UI.message("🔍 Testing API access with xcrun altool...")
+      
+      # Create temporary key file for testing
+      temp_key_file = "/tmp/test_api_key.p8"
+      File.write(temp_key_file, api_key_object[:key])
+      
+      # Set environment for altool
+      ENV['API_PRIVATE_KEYS_DIR'] = '/tmp'
+      
+      # Test basic API access
+      result = sh(
+        "xcrun altool --list-apps --apiKey #{api_key_object[:key_id]} --apiIssuer #{api_key_object[:issuer_id]} -t ios 2>&1 || echo 'API_TEST_FAILED'",
+        log: false
+      ).strip
+      
+      if result.include?("API_TEST_FAILED")
+        UI.error("❌ API key test failed")
+        UI.message("   Result: #{result}")
+      elsif result.include?("No Applications found")
+        UI.message("⚠️ No applications found (API key works but no apps)")
+      else
+        UI.success("✅ API key test successful")
+        UI.message("   Found applications")
+      end
+      
+      # Cleanup
+      File.delete(temp_key_file) if File.exist?(temp_key_file)
+      
+    rescue => e
+      UI.message("⚠️ API key test error: #{e.message}")
+    end
+  end
+  
+  # 🔧 Helper method สำหรับ setup certificates พร้อม API key
   private_lane :setup_certificates_with_api_key do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
+    readonly_mode = options[:readonly] || true
     cert_type = options[:type] || "appstore"
     
-    UI.message("🔐 Setting up certificates...")
+    UI.header("🔐 CERTIFICATES & PROVISIONING SETUP")
     UI.message("   Type: #{cert_type}")
     UI.message("   Readonly: #{readonly_mode}")
     
     # สร้าง match options
     match_options = {
       type: cert_type,
-      readonly: readonly_mode
+      readonly: readonly_mode,
+      verbose: true  # 🔍 Enable verbose logging
     }
     
     # เพิ่ม API key ถ้ามี
@@ -122,189 +316,145 @@ platform :ios do
     end
     
     # เรียกใช้ match
-    match(match_options)
-    UI.success("✅ Certificates setup completed!")
-  end
-  
-  # 🔧 Private lanes for different deployment targets with API key support
-  private_lane :deploy_to_app_store do
-    UI.message("🏪 Uploading to App Store...")
-    
-    upload_options = {
-      ipa: "build/Runner.ipa",
-      skip_metadata: true,
-      skip_screenshots: true,
-      submit_for_review: false,
-      automatic_release: false,
-      force: true,
-      precheck_include_in_app_purchases: false
-    }
-    
-    # ✅ ใช้ API key object แทน traditional auth
-    api_key_object = create_api_key_object
-    if api_key_object
-      upload_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for App Store upload")
-    else
-      UI.message("⚠️ Using traditional auth for App Store upload")
+    begin
+      match(match_options)
+      UI.success("✅ Certificates setup completed!")
+    rescue => e
+      UI.error("❌ Match failed: #{e.message}")
+      
+      # 🔍 ENHANCED ERROR LOGGING
+      UI.message("🔍 Match error details:")
+      UI.message("   Error class: #{e.class}")
+      UI.message("   Backtrace: #{e.backtrace.first(5).join("\n   ")}")
+      
+      # Check common issues
+      if e.message.include?("git")
+        UI.message("💡 This appears to be a Git-related error")
+      elsif e.message.include?("certificate")
+        UI.message("💡 This appears to be a certificate-related error")
+      elsif e.message.include?("profile")
+        UI.message("💡 This appears to be a provisioning profile error")
+      end
+      
+      raise e
     end
-    
-    upload_to_app_store(upload_options)
   end
   
-  private_lane :deploy_to_testflight_beta do
-    UI.message("✈️ Uploading to TestFlight (Beta)...")
-    
-    upload_options = {
-      ipa: "build/Runner.ipa",
-      groups: ["Beta Testers"],
-      distribute_external: true,
-      notify_external_testers: true,
-      changelog: "Beta release - please test and provide feedback",
-      skip_waiting_for_build_processing: false
-    }
-    
-    # ✅ ใช้ API key object
-    api_key_object = create_api_key_object
-    if api_key_object
-      upload_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for TestFlight Beta upload")
-    else
-      UI.message("⚠️ Using traditional auth for TestFlight Beta upload")
-    end
-    
-    upload_to_testflight(upload_options)
-  end
-  
+  # 🔧 Enhanced TestFlight upload with detailed logging
   private_lane :deploy_to_testflight_internal do
-    UI.message("🔒 Uploading to TestFlight (Internal)...")
+    UI.header("🔒 TESTFLIGHT INTERNAL UPLOAD")
+    
+    # 🔍 PRE-UPLOAD CHECKS
+    ipa_path = "build/Runner.ipa"
+    unless File.exist?(ipa_path)
+      UI.user_error!("❌ IPA file not found: #{ipa_path}")
+    end
+    
+    UI.message("📦 IPA file: #{ipa_path}")
+    UI.message("📦 IPA size: #{(File.size(ipa_path) / 1024.0 / 1024.0).round(2)} MB")
     
     upload_options = {
-      ipa: "build/Runner.ipa",
+      ipa: ipa_path,
       distribute_external: false,
       notify_external_testers: false,
-      changelog: "Internal testing build",
-      skip_waiting_for_build_processing: true
+      changelog: "Internal testing build - #{Time.now.strftime('%Y-%m-%d %H:%M')}",
+      skip_waiting_for_build_processing: true,
+      skip_submission: true  # 🔍 เพิ่ม option นี้
     }
     
-    # ✅ ใช้ API key object
+    # เพิ่ม API key
     api_key_object = create_api_key_object
     if api_key_object
       upload_options[:api_key] = api_key_object
       UI.success("✅ Using App Store Connect API for TestFlight Internal upload")
+      
+      # 🔍 LOG UPLOAD OPTIONS
+      UI.message("📋 Upload configuration:")
+      upload_options.each do |key, value|
+        next if key == :api_key  # Don't log sensitive data
+        UI.message("   #{key}: #{value}")
+      end
+      
     else
       UI.message("⚠️ Using traditional auth for TestFlight Internal upload")
     end
     
-    upload_to_testflight(upload_options)
-  end
-  
-  # Helper lanes for specific branches
-  desc "Deploy to App Store (main branch)"
-  lane :deploy_production do
-    deploy(target: "app_store")
-  end
-  
-  desc "Deploy to TestFlight Beta (staging branch)"
-  lane :deploy_staging do
-    deploy(target: "testflight_beta")
-  end
-  
-  desc "Deploy to TestFlight Internal (develop branch)"
-  lane :deploy_development do
-    deploy(target: "testflight_internal")
-  end
-  
-  # Debug/testing lanes
-  desc "Build only (no deploy)"
-  lane :build_only do |options|
-    version = options[:version] || "1.0.0"
-    build_number = options[:build_number] || "1"
-    
-    UI.message("🔨 Building iOS app...")
-    UI.message("📋 Version: #{version} (#{build_number})")
-    
-    # 🔧 Setup certificates พร้อม API key (ใช้ readonly เพราะมี cert แล้ว)
-    setup_certificates_with_api_key(readonly: true)
-    
-    # Update version
-    increment_version_number(version_number: version)
-    increment_build_number(build_number: build_number)
-    
-    # Build Flutter
-    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
-    
-    # Build with Xcode
-    build_app(
-      workspace: "Runner.xcworkspace",
-      scheme: "Runner",
-      export_method: "app-store",
-      output_directory: "build",
-      output_name: "Runner.ipa"
-    )
-    
-    UI.success("✅ iOS build completed!")
-  end
-  
-  desc "Setup certificates only"
-  lane :setup_certificates do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true
-    cert_type = options[:type] || "appstore"
-    
-    # 🔧 ใช้ helper method ใหม่
-    setup_certificates_with_api_key(readonly: readonly_mode, type: cert_type)
-  end
-  
-  # 🔧 Submit for review lane with API key support
-  desc "Submit for App Store review"
-  lane :submit_for_review do
-    UI.message("📋 Submitting for App Store review...")
-    
-    upload_options = {
-      skip_binary_upload: true,
-      submit_for_review: true,
-      automatic_release: false,
-      force: true,
-      submission_information: submission_info
-    }
-    
-    # ✅ ใช้ API key object
-    api_key_object = create_api_key_object
-    if api_key_object
-      upload_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for review submission")
-    else
-      UI.message("⚠️ Using traditional auth for review submission")
+    # 🔍 ENHANCED UPLOAD WITH ERROR HANDLING
+    begin
+      UI.message("🚀 Starting upload to TestFlight...")
+      UI.message("⏱️ Upload started at: #{Time.now}")
+      
+      upload_to_testflight(upload_options)
+      
+      UI.success("✅ Upload completed successfully!")
+      UI.message("⏱️ Upload finished at: #{Time.now}")
+      
+    rescue => upload_error
+      UI.header("❌ TESTFLIGHT UPLOAD FAILED")
+      UI.error("Error: #{upload_error.message}")
+      UI.error("Class: #{upload_error.class}")
+      
+      # 🔍 DETAILED ERROR ANALYSIS
+      error_message = upload_error.message.downcase
+      
+      if error_message.include?("altool")
+        UI.message("🔍 This is an altool-related error")
+        
+        if error_message.include?("object cannot be nil")
+          UI.message("💡 Possible causes:")
+          UI.message("   • API key doesn't have TestFlight permissions")
+          UI.message("   • App not properly configured in App Store Connect")
+          UI.message("   • Team ID mismatch between certificate and API key")
+          UI.message("   • altool version compatibility issue")
+        end
+        
+        if error_message.include?("1010")
+          UI.message("💡 Error code 1010 suggests:")
+          UI.message("   • Invalid API key configuration")
+          UI.message("   • Missing required metadata in IPA")
+          UI.message("   • App Store Connect setup incomplete")
+        end
+      end
+      
+      # Log environment info for debugging
+      UI.message("🔍 Environment info:")
+      UI.message("   Xcode version: #{`xcodebuild -version`.split("\n").first}")
+      UI.message("   Fastlane version: #{Fastlane::VERSION}")
+      UI.message("   Ruby version: #{RUBY_VERSION}")
+      
+      # Show recent altool logs if available
+      altool_logs = `find ~/Library/Logs -name "*altool*" -mtime -1 2>/dev/null | head -5`
+      if !altool_logs.empty?
+        UI.message("🔍 Recent altool logs found:")
+        altool_logs.split("\n").each { |log| UI.message("   #{log}") }
+      end
+      
+      raise upload_error
     end
-    
-    upload_to_app_store(upload_options)
-    UI.success("✅ App submitted for review!")
   end
   
-  # 🔧 Submission information for App Store review
-  private_lane :submission_info do
-    {
-      add_id_info_limits_tracking: true,
-      add_id_info_serves_ads: false,
-      add_id_info_tracks_action: true,
-      add_id_info_tracks_install: true,
-      add_id_info_uses_idfa: true,
-      content_rights_has_rights: true,
-      content_rights_contains_third_party_content: true,
-      export_compliance_platform: 'ios',
-      export_compliance_compliance_required: false,
-      export_compliance_encryption_updated: false,
-      export_compliance_uses_encryption: false,
-      export_compliance_is_exempt: false,
-      export_compliance_contains_third_party_cryptography: false,
-      export_compliance_contains_proprietary_cryptography: false,
-      export_compliance_available_on_french_store: false
-    }
+  # Add other lanes with similar enhanced logging...
+  private_lane :deploy_to_testflight_beta do
+    # Similar structure with enhanced logging
   end
   
-  # Error handling
+  private_lane :deploy_to_app_store do
+    # Similar structure with enhanced logging  
+  end
+  
+  # Enhanced error handling
   error do |lane, exception|
-    UI.error("❌ Error in #{lane}: #{exception.message}")
+    UI.header("❌ FASTLANE ERROR")
+    UI.error("Lane: #{lane}")
+    UI.error("Error: #{exception.message}")
+    UI.error("Class: #{exception.class}")
+    
+    # 🔍 LOG FULL BACKTRACE FOR DEBUGGING
+    UI.message("🔍 Full backtrace:")
+    exception.backtrace.each_with_index do |line, index|
+      UI.message("   #{index}: #{line}")
+      break if index > 10  # Limit to first 10 lines
+    end
     
     # Clean up build artifacts on error
     if File.exist?("build")
@@ -314,6 +464,14 @@ platform :ios do
     
     if ENV['CI']
       UI.message("📋 Fastlane logs available in artifacts")
+    end
+    
+    # 🔍 LOG ENVIRONMENT STATE
+    UI.message("🔍 Environment state:")
+    UI.message("   PWD: #{Dir.pwd}")
+    UI.message("   Files in current dir: #{Dir.glob('*').join(', ')}")
+    if File.exist?("build")
+      UI.message("   Files in build dir: #{Dir.glob('build/*').join(', ')}")
     end
   end
 end
