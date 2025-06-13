@@ -151,7 +151,7 @@ platform :ios do
     
     max_length = [v1_parts.length, v2_parts.length].max
     
-    max_length.times do |i|
+    for i in 0...max_length
       v1 = v1_parts[i] || 0
       v2 = v2_parts[i] || 0
       
