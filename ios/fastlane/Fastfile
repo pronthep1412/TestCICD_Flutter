@@ -15,7 +15,7 @@ platform :ios do
     original_version = options[:original_version] || raw_version
     
     # ✅ Clean และ validate version
-    clean_version = validate_and_clean_version(raw_version)
+    clean_version = validate_and_clean_version(version: raw_version)
     
     UI.message("🍎 Building and deploying iOS")
     UI.message("🎯 Target: #{target}")
@@ -46,11 +46,11 @@ platform :ios do
     # Deploy based on target with retry mechanism
     case target
     when "app_store"
-      deploy_to_app_store_with_retry(clean_version, original_version)
+      deploy_to_app_store_with_retry(version: clean_version, original_version: original_version)
     when "testflight_beta"
-      deploy_to_testflight_beta_with_retry(clean_version, original_version)
+      deploy_to_testflight_beta_with_retry(version: clean_version, original_version: original_version)
     when "testflight_internal"
-      deploy_to_testflight_internal_with_retry(clean_version, original_version)
+      deploy_to_testflight_internal_with_retry(version: clean_version, original_version: original_version)
     else
       UI.user_error!("❌ Unknown target: #{target}")
     end
@@ -60,7 +60,8 @@ platform :ios do
   end
   
   # 🔧 Enhanced: Validate และ clean version format for App Store
-  private_lane :validate_and_clean_version do |version|
+  private_lane :validate_and_clean_version do |options|
+    version = options[:version] || "67000.0.0"
     UI.message("🔍 Validating and cleaning version: #{version}")
     
     # Remove any whitespace
@@ -125,7 +126,7 @@ platform :ios do
     
     # Check against minimum version (มากกว่า 66666.0.0)
     min_version = "66666.0.0"
-    if version_compare(clean_version, min_version) <= 0
+    if version_compare(version1: clean_version, version2: min_version) <= 0
       UI.warning("⚠️ Version #{clean_version} is not greater than minimum #{min_version}")
       # Auto increment
       min_parts = min_version.split('.')
@@ -139,7 +140,10 @@ platform :ios do
   end
   
   # 🔧 Helper: Compare versions
-  private_lane :version_compare do |version1, version2|
+  private_lane :version_compare do |options|
+    version1 = options[:version1]
+    version2 = options[:version2]
+    
     return 0 if version1 == version2
     
     v1_parts = version1.split('.').map(&:to_i)
@@ -231,10 +235,13 @@ platform :ios do
   end
   
   # 🔧 Enhanced deployment methods with retry mechanism
-  private_lane :deploy_to_app_store_with_retry do |version, original_version|
+  private_lane :deploy_to_app_store_with_retry do |options|
+    version = options[:version]
+    original_version = options[:original_version]
+    
     UI.message("🏪 Uploading to App Store...")
     
-    changelog_text = create_changelog(version, original_version, "Release")
+    changelog_text = create_changelog(version: version, original_version: original_version, prefix: "Release")
     
     upload_options = {
       ipa: "build/Runner.ipa",
@@ -254,13 +261,16 @@ platform :ios do
       UI.message("⚠️ Using traditional auth for App Store upload")
     end
     
-    upload_with_retry("app_store", upload_options)
+    upload_with_retry(target: "app_store", upload_options: upload_options)
   end
   
-  private_lane :deploy_to_testflight_beta_with_retry do |version, original_version|
+  private_lane :deploy_to_testflight_beta_with_retry do |options|
+    version = options[:version]
+    original_version = options[:original_version]
+    
     UI.message("✈️ Uploading to TestFlight (Beta)...")
     
-    changelog_text = create_changelog(version, original_version, "Beta release")
+    changelog_text = create_changelog(version: version, original_version: original_version, prefix: "Beta release")
     
     upload_options = {
       ipa: "build/Runner.ipa",
@@ -279,13 +289,16 @@ platform :ios do
       UI.message("⚠️ Using traditional auth for TestFlight Beta upload")
     end
     
-    upload_with_retry("testflight", upload_options)
+    upload_with_retry(target: "testflight", upload_options: upload_options)
   end
   
-  private_lane :deploy_to_testflight_internal_with_retry do |version, original_version|
+  private_lane :deploy_to_testflight_internal_with_retry do |options|
+    version = options[:version]
+    original_version = options[:original_version]
+    
     UI.message("🔒 Uploading to TestFlight (Internal)...")
     
-    changelog_text = create_changelog(version, original_version, "Internal testing build")
+    changelog_text = create_changelog(version: version, original_version: original_version, prefix: "Internal testing build")
     
     upload_options = {
       ipa: "build/Runner.ipa",
@@ -303,11 +316,15 @@ platform :ios do
       UI.message("⚠️ Using traditional auth for TestFlight Internal upload")
     end
     
-    upload_with_retry("testflight", upload_options)
+    upload_with_retry(target: "testflight", upload_options: upload_options)
   end
   
   # 🔧 Helper: Create appropriate changelog
-  private_lane :create_changelog do |version, original_version, prefix|
+  private_lane :create_changelog do |options|
+    version = options[:version]
+    original_version = options[:original_version]
+    prefix = options[:prefix]
+    
     if original_version != version
       "#{prefix} #{original_version} (App Store version: #{version})"
     else
@@ -316,7 +333,10 @@ platform :ios do
   end
   
   # 🔧 Enhanced upload with retry mechanism
-  private_lane :upload_with_retry do |target, upload_options|
+  private_lane :upload_with_retry do |options|
+    target = options[:target]
+    upload_options = options[:upload_options]
+    
     max_retries = 3
     retry_delay = 30
     
@@ -391,7 +411,7 @@ platform :ios do
     UI.message("📋 Version: #{version} (#{build_number})")
     
     # ✅ Clean และ validate version
-    clean_version = validate_and_clean_version(version)
+    clean_version = validate_and_clean_version(version: version)
     
     # 🔧 Setup certificates พร้อม API key
     setup_certificates_with_api_key(readonly: true)
@@ -443,7 +463,7 @@ platform :ios do
     UI.message("🧪 Testing version format cleaning...")
     test_versions.each do |version|
       UI.message("Input: #{version}")
-      clean = validate_and_clean_version(version)
+      clean = validate_and_clean_version(version: version)
       UI.message("Output: #{clean}")
       UI.message("---")
     end
