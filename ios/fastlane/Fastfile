@@ -217,7 +217,9 @@ platform :ios do
       groups: ["Internal Testers", "Developers"],  # Same as RN
       distribute_external: false,
       notify_external_testers: false,
-      changelog: "Automated build from #{ENV['GITHUB_REF_NAME'] || 'develop'} branch"  # Same as RN
+      changelog: "Automated build from #{ENV['GITHUB_REF_NAME'] || 'develop'} branch",  # Same as RN
+      use_transporter: true,      # บังคับใช้ transporter
+      transporter: "transporter"  # ระบุชื่อ executable
     }
     
     # 🔧 EXACT SAME API KEY SETUP AS REACT NATIVE VERSION
@@ -300,7 +302,9 @@ platform :ios do
       groups: ["Beta Testers", "QA Team"],
       distribute_external: true,
       notify_external_testers: true,
-      changelog: "Beta build from #{ENV['GITHUB_REF_NAME'] || 'preprod'} branch"
+      changelog: "Beta build from #{ENV['GITHUB_REF_NAME'] || 'preprod'} branch",
+      use_transporter: true,      # บังคับใช้ transporter
+      transporter: "transporter"  # ระบุชื่อ executable
     }
     
     # Same API key setup as internal
@@ -364,7 +368,9 @@ platform :ios do
       automatic_release: false,
       skip_metadata: true,
       skip_screenshots: true,
-      precheck_include_in_app_purchases: false
+      precheck_include_in_app_purchases: false,
+      use_transporter: true,      # บังคับใช้ transporter
+      transporter: "transporter"  # ระบุชื่อ executable
     }
     
     # Same API key setup
