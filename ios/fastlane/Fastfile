@@ -1,4 +1,4 @@
-# ios/fastlane/Fastfile - ฉบับสมบูรณ์หลังแก้ไข
+# ios/fastlane/Fastfile - Updated with API key object support for ALL actions
 default_platform(:ios)
 
 platform :ios do
@@ -10,28 +10,24 @@ platform :ios do
   desc "Deploy to App Store Connect"
   lane :deploy do |options|
     target = options[:target] || "testflight_internal"
-    raw_version = options[:version] || "67000.0.0"
-    build_number = options[:build_number] || "1"
-    original_version = options[:original_version] || raw_version
-    
-    # ✅ Clean และ validate version
-    clean_version = validate_and_clean_version(version: raw_version)
+    # version = options[:version] || "1.0.0"
+    # build_number = options[:build_number] || "1"
+    version = "67000.0.0"
+    build_number = "1"
     
     UI.message("🍎 Building and deploying iOS")
     UI.message("🎯 Target: #{target}")
-    UI.message("📋 Raw Version: #{raw_version}")
-    UI.message("📋 Clean Version: #{clean_version} (#{build_number})")
-    UI.message("📋 Original Version: #{original_version}") if original_version != clean_version
+    UI.message("📋 Version: #{version} (#{build_number})")
     
-    # 🔧 Setup certificates and provisioning profiles
+    # 🔧 Setup certificates and provisioning profiles with Match + API Key
     setup_certificates_with_api_key
     
-    # Update version numbers with clean version
-    increment_version_number(version_number: clean_version)
+    # Update version numbers
+    increment_version_number(version_number: version)
     increment_build_number(build_number: build_number)
     
-    # Build Flutter iOS
-    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{clean_version} --build-number=#{build_number}")
+    # Build Flutter iOS (without codesign - Fastlane will handle it)
+    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
     
     # Build and archive with Xcode
     build_app(
@@ -43,123 +39,19 @@ platform :ios do
       silent: true
     )
     
-    # Deploy based on target with retry mechanism
+    # Deploy based on target
     case target
     when "app_store"
-      deploy_to_app_store_with_retry(version: clean_version, original_version: original_version)
+      deploy_to_app_store
     when "testflight_beta"
-      deploy_to_testflight_beta_with_retry(version: clean_version, original_version: original_version)
+      deploy_to_testflight_beta
     when "testflight_internal"
-      deploy_to_testflight_internal_with_retry(version: clean_version, original_version: original_version)
+      deploy_to_testflight_internal
     else
       UI.user_error!("❌ Unknown target: #{target}")
     end
     
     UI.success("✅ Successfully deployed to #{target}!")
-    UI.success("📋 Version deployed: #{clean_version} (build #{build_number})")
-  end
-  
-  # 🔧 Enhanced: Validate และ clean version format for App Store
-  private_lane :validate_and_clean_version do |options|
-    version = options[:version] || "67000.0.0"
-    UI.message("🔍 Validating and cleaning version: #{version}")
-    
-    # Remove any whitespace
-    clean_version = version.to_s.strip
-    original_input = clean_version
-    
-    # Pattern matching และ cleaning
-    case clean_version
-    when /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/
-      # 4-part version: X.Y.Z.W -> X.Y.Z
-      major, minor, patch, build_part = $1, $2, $3, $4
-      clean_version = "#{major}.#{minor}.#{patch}"
-      UI.message("⚠️ 4-part version detected: #{original_input} → #{clean_version}")
-      UI.message("💡 Build part (#{build_part}) ignored for App Store compliance")
-      
-    when /^(\d+\.\d+\.\d+)-(alpha|beta|rc)\.?(\d+)?$/
-      # Pre-release version: X.Y.Z-pre.N -> X.Y.Z
-      base_version, prerelease, number = $1, $2, $3
-      clean_version = base_version
-      UI.message("⚠️ Pre-release version detected: #{original_input} → #{clean_version}")
-      UI.message("💡 Pre-release identifier (#{prerelease}) removed for App Store compliance")
-      
-    when /^(\d+)\.(\d+)$/
-      # 2-part version: X.Y -> X.Y.0
-      major, minor = $1, $2
-      clean_version = "#{major}.#{minor}.0"
-      UI.message("⚠️ 2-part version detected: #{original_input} → #{clean_version}")
-      
-    when /^(\d+)$/
-      # 1-part version: X -> X.0.0
-      major = $1
-      clean_version = "#{major}.0.0"
-      UI.message("⚠️ 1-part version detected: #{original_input} → #{clean_version}")
-      
-    when /^\d+\.\d+\.\d+$/
-      # Already valid 3-part version
-      UI.success("✅ Version format is already valid: #{clean_version}")
-      
-    else
-      # Invalid format - use smart fallback
-      UI.error("❌ Invalid version format: #{version}")
-      UI.error("💡 Supported formats: X.Y.Z, X.Y.Z.W, X.Y.Z-alpha.N")
-      UI.error("📝 Using fallback version: 67000.0.0")
-      clean_version = "67000.0.0"
-    end
-    
-    # Final validation
-    unless clean_version.match?(/^\d+\.\d+\.\d+$/)
-      UI.error("❌ Final validation failed for: #{clean_version}")
-      clean_version = "67000.0.0"
-    end
-    
-    # Additional numeric validation และ App Store compliance
-    parts = clean_version.split('.')
-    parts.each_with_index do |part, index|
-      unless part.match?(/^\d+$/) && part.to_i >= 0
-        UI.error("❌ Invalid version part at position #{index}: #{part}")
-        clean_version = "67000.0.0"
-        break
-      end
-    end
-    
-    # Check against minimum version (มากกว่า 66666.0.0)
-    min_version = "66666.0.0"
-    if version_compare(version1: clean_version, version2: min_version) <= 0
-      UI.warning("⚠️ Version #{clean_version} is not greater than minimum #{min_version}")
-      # Auto increment
-      min_parts = min_version.split('.')
-      new_patch = min_parts[2].to_i + 1
-      clean_version = "#{min_parts[0]}.#{min_parts[1]}.#{new_patch}"
-      UI.message("🔄 Auto-incremented to: #{clean_version}")
-    end
-    
-    UI.success("✅ Final clean version: #{clean_version}")
-    clean_version
-  end
-  
-  # 🔧 Helper: Compare versions
-  private_lane :version_compare do |options|
-    version1 = options[:version1]
-    version2 = options[:version2]
-    
-    return 0 if version1 == version2
-    
-    v1_parts = version1.split('.').map(&:to_i)
-    v2_parts = version2.split('.').map(&:to_i)
-    
-    max_length = [v1_parts.length, v2_parts.length].max
-    
-    for i in 0...max_length
-      v1 = v1_parts[i] || 0
-      v2 = v2_parts[i] || 0
-      
-      return 1 if v1 > v2
-      return -1 if v1 < v2
-    end
-    
-    0
   end
   
   # 🔧 Helper method สำหรับสร้าง App Store Connect API key object
@@ -207,9 +99,9 @@ platform :ios do
     end
   end
   
-  # 🔧 Helper method สำหรับ setup certificates พร้อม API key
+  # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
   private_lane :setup_certificates_with_api_key do |options|
-    readonly_mode = options[:readonly] || true
+    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
     cert_type = options[:type] || "appstore"
     
     UI.message("🔐 Setting up certificates...")
@@ -236,14 +128,9 @@ platform :ios do
     UI.success("✅ Certificates setup completed!")
   end
   
-  # 🔧 Enhanced deployment methods with retry mechanism
-  private_lane :deploy_to_app_store_with_retry do |options|
-    version = options[:version]
-    original_version = options[:original_version]
-    
+  # 🔧 Private lanes for different deployment targets with API key support
+  private_lane :deploy_to_app_store do
     UI.message("🏪 Uploading to App Store...")
-    
-    changelog_text = create_changelog(version: version, original_version: original_version, prefix: "Release")
     
     upload_options = {
       ipa: "build/Runner.ipa",
@@ -255,6 +142,7 @@ platform :ios do
       precheck_include_in_app_purchases: false
     }
     
+    # ✅ ใช้ API key object แทน traditional auth
     api_key_object = create_api_key_object
     if api_key_object
       upload_options[:api_key] = api_key_object
@@ -263,26 +151,22 @@ platform :ios do
       UI.message("⚠️ Using traditional auth for App Store upload")
     end
     
-    upload_with_retry(target: "app_store", upload_options: upload_options)
+    upload_to_app_store(upload_options)
   end
   
-  private_lane :deploy_to_testflight_beta_with_retry do |options|
-    version = options[:version]
-    original_version = options[:original_version]
-    
+  private_lane :deploy_to_testflight_beta do
     UI.message("✈️ Uploading to TestFlight (Beta)...")
-    
-    changelog_text = create_changelog(version: version, original_version: original_version, prefix: "Beta release")
     
     upload_options = {
       ipa: "build/Runner.ipa",
       groups: ["Beta Testers"],
       distribute_external: true,
       notify_external_testers: true,
-      changelog: changelog_text,
+      changelog: "Beta release - please test and provide feedback",
       skip_waiting_for_build_processing: false
     }
     
+    # ✅ ใช้ API key object
     api_key_object = create_api_key_object
     if api_key_object
       upload_options[:api_key] = api_key_object
@@ -291,25 +175,21 @@ platform :ios do
       UI.message("⚠️ Using traditional auth for TestFlight Beta upload")
     end
     
-    upload_with_retry(target: "testflight", upload_options: upload_options)
+    upload_to_testflight(upload_options)
   end
   
-  private_lane :deploy_to_testflight_internal_with_retry do |options|
-    version = options[:version]
-    original_version = options[:original_version]
-    
+  private_lane :deploy_to_testflight_internal do
     UI.message("🔒 Uploading to TestFlight (Internal)...")
-    
-    changelog_text = create_changelog(version: version, original_version: original_version, prefix: "Internal testing build")
     
     upload_options = {
       ipa: "build/Runner.ipa",
       distribute_external: false,
       notify_external_testers: false,
-      changelog: changelog_text,
+      changelog: "Internal testing build",
       skip_waiting_for_build_processing: true
     }
     
+    # ✅ ใช้ API key object
     api_key_object = create_api_key_object
     if api_key_object
       upload_options[:api_key] = api_key_object
@@ -318,73 +198,7 @@ platform :ios do
       UI.message("⚠️ Using traditional auth for TestFlight Internal upload")
     end
     
-    upload_with_retry(target: "testflight", upload_options: upload_options)
-  end
-  
-  # 🔧 Helper: Create appropriate changelog
-  private_lane :create_changelog do |options|
-    version = options[:version]
-    original_version = options[:original_version]
-    prefix = options[:prefix]
-    
-    if original_version != version
-      "#{prefix} #{original_version} (App Store version: #{version})"
-    else
-      "#{prefix} #{version}"
-    end
-  end
-  
-  # 🔧 Enhanced upload with retry mechanism
-  private_lane :upload_with_retry do |options|
-    target = options[:target]
-    upload_options = options[:upload_options]
-    
-    max_retries = 3
-    retry_delay = 30
-    
-    (1..max_retries).each do |attempt|
-      begin
-        UI.message("🚀 Upload attempt #{attempt}/#{max_retries}")
-        
-        case target
-        when "app_store"
-          upload_to_app_store(upload_options)
-        when "testflight"
-          upload_to_testflight(upload_options)
-        end
-        
-        UI.success("✅ Upload successful on attempt #{attempt}")
-        return
-        
-      rescue => e
-        UI.error("❌ Upload attempt #{attempt} failed: #{e.message}")
-        
-        # Check for specific errors
-        if e.message.include?("object cannot be nil") || e.message.include?("-1010")
-          UI.error("🔍 Detected altool nil object error")
-          UI.error("💡 This usually indicates a version format issue")
-          UI.error("💡 Current version format should be valid X.Y.Z")
-          
-        elsif e.message.include?("CFBundleShortVersionString")
-          UI.error("🔍 Version format error in Info.plist")
-          UI.error("💡 App Store requires version format: X.Y.Z")
-          
-        elsif e.message.include?("version that is already being used")
-          UI.error("🔍 Version conflict detected")
-          UI.error("💡 This version may already exist in App Store Connect")
-          UI.error("💡 Try incrementing the version number")
-          
-        end
-        
-        if attempt < max_retries
-          UI.message("⏳ Waiting #{retry_delay} seconds before retry...")
-          sleep(retry_delay)
-          retry_delay += 15  # Increase delay for next retry
-        else
-          UI.user_error!("❌ All upload attempts failed. Last error: #{e.message}")
-        end
-      end
-    end
+    upload_to_testflight(upload_options)
   end
   
   # Helper lanes for specific branches
@@ -406,24 +220,23 @@ platform :ios do
   # Debug/testing lanes
   desc "Build only (no deploy)"
   lane :build_only do |options|
-    version = options[:version] || "67000.0.0"
-    build_number = options[:build_number] || "1"
+    # version = options[:version] || "1.0.0"
+    # build_number = options[:build_number] || "1"
+    version = "67000.0.0"
+    build_number = "1"
     
     UI.message("🔨 Building iOS app...")
     UI.message("📋 Version: #{version} (#{build_number})")
     
-    # ✅ Clean และ validate version
-    clean_version = validate_and_clean_version(version: version)
-    
-    # 🔧 Setup certificates พร้อม API key
+    # 🔧 Setup certificates พร้อม API key (ใช้ readonly เพราะมี cert แล้ว)
     setup_certificates_with_api_key(readonly: true)
     
     # Update version
-    increment_version_number(version_number: clean_version)
+    increment_version_number(version_number: version)
     increment_build_number(build_number: build_number)
     
     # Build Flutter
-    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{clean_version} --build-number=#{build_number}")
+    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
     
     # Build with Xcode
     build_app(
@@ -439,36 +252,11 @@ platform :ios do
   
   desc "Setup certificates only"
   lane :setup_certificates do |options|
-    readonly_mode = options[:readonly] || true
+    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true
     cert_type = options[:type] || "appstore"
     
     # 🔧 ใช้ helper method ใหม่
     setup_certificates_with_api_key(readonly: readonly_mode, type: cert_type)
-  end
-  
-  # 🔧 Test version cleaning utility
-  desc "Test version format cleaning"
-  lane :test_version_formats do
-    test_versions = [
-      "1.0.0.84",           # 4-part version
-      "1.0.0-alpha.84",     # Pre-release
-      "67000.0.0",          # Valid 3-part (new baseline)
-      "2.1",                # 2-part
-      "3",                  # 1-part
-      "1.0.0-beta.5",       # Beta version
-      "invalid.version",    # Invalid
-      "1.2.3.4.5",         # Too many parts
-      "66666.0.0",          # Equal to minimum (should increment)
-      "66665.0.0",          # Less than minimum (should increment)
-    ]
-    
-    UI.message("🧪 Testing version format cleaning...")
-    test_versions.each do |version|
-      UI.message("Input: #{version}")
-      clean = validate_and_clean_version(version: version)
-      UI.message("Output: #{clean}")
-      UI.message("---")
-    end
   end
   
   # 🔧 Submit for review lane with API key support
@@ -518,33 +306,9 @@ platform :ios do
     }
   end
   
-  # 🔧 Enhanced error handling
+  # Error handling
   error do |lane, exception|
     UI.error("❌ Error in #{lane}: #{exception.message}")
-    
-    # Enhanced error diagnostics
-    if exception.message.include?("CFBundleShortVersionString")
-      UI.error("🔍 Version format error detected!")
-      UI.error("💡 App Store requires version format: X.Y.Z (e.g., 67000.0.0)")
-      UI.error("💡 Remove any alpha/beta/rc suffixes from version string")
-      UI.error("💡 Ensure version is greater than 66666.0.0")
-      
-    elsif exception.message.include?("object cannot be nil") || exception.message.include?("-1010")
-      UI.error("🔍 altool error detected!")
-      UI.error("💡 This usually indicates a version format issue")
-      UI.error("💡 Check Info.plist CFBundleShortVersionString value")
-      UI.error("💡 Ensure version follows X.Y.Z format")
-      
-    elsif exception.message.include?("version that is already being used")
-      UI.error("🔍 Version conflict detected!")
-      UI.error("💡 This version already exists in App Store Connect")
-      UI.error("💡 Increment version number or build number")
-      
-    elsif exception.message.include?("Invalid binary")
-      UI.error("🔍 Binary validation error!")
-      UI.error("💡 Check for missing architectures or invalid signatures")
-      
-    end
     
     # Clean up build artifacts on error
     if File.exist?("build")
@@ -554,16 +318,6 @@ platform :ios do
     
     if ENV['CI']
       UI.message("📋 Fastlane logs available in artifacts")
-      UI.message("💡 Check GitHub Actions artifacts for detailed logs")
     end
-    
-    # Provide helpful suggestions
-    UI.message("")
-    UI.message("💡 Troubleshooting suggestions:")
-    UI.message("   1. Verify version format is X.Y.Z")
-    UI.message("   2. Ensure version > 66666.0.0")
-    UI.message("   3. Check App Store Connect for conflicting versions")
-    UI.message("   4. Verify certificates and provisioning profiles")
-    UI.message("   5. Check API key configuration")
   end
 end
