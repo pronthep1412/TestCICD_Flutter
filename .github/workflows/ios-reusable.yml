@@ -1,4 +1,4 @@
-# .github/workflows/ios-reusable.yml - Updated with API key content support
+# .github/workflows/ios-reusable.yml - ฉบับสมบูรณ์หลังแก้ไข
 name: iOS Build & Deploy
 
 on:
@@ -34,11 +34,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g., 1.2.3)'
+        description: 'Version (e.g., 67000.0.0)'
         required: true
-        default: '1.0.0'
+        default: '67000.0.0'
       version_code:
-        description: 'Version code (e.g., 123)'
+        description: 'Version code (e.g., 1)'
         required: true
         default: '1'
       branch:
@@ -52,6 +52,8 @@ on:
 
 env:
   FLUTTER_VERSION: '3.32.2'
+  # กำหนด minimum version (มากกว่า version ล่าสุดใน App Store)
+  MIN_APP_STORE_VERSION: '66666.0.0'
 
 jobs:
   build-and-deploy-ios:
@@ -69,6 +71,133 @@ jobs:
           echo "- macOS: $(sw_vers -productVersion)"
           echo "- Xcode: $(xcodebuild -version | head -1)"
           echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
+
+      # 🔧 แก้ไข version format และป้องกัน version ย้อนหลัง
+      - name: Normalize Version Format
+        id: version
+        run: |
+          INPUT_VERSION="${{ inputs.version }}"
+          MIN_VERSION="${{ env.MIN_APP_STORE_VERSION }}"
+          
+          echo "🔍 Original version: $INPUT_VERSION"
+          echo "📋 Minimum required version: $MIN_VERSION"
+          
+          # Function สำหรับเปรียบเทียบ version
+          version_compare() {
+            if [[ $1 == $2 ]]; then echo 0; return; fi
+            
+            IFS='.' read -ra VER1 <<< "$1"
+            IFS='.' read -ra VER2 <<< "$2"
+            
+            for i in {0..2}; do
+              v1=${VER1[$i]:-0}
+              v2=${VER2[$i]:-0}
+              if (( v1 > v2 )); then echo 1; return; fi
+              if (( v1 < v2 )); then echo -1; return; fi
+            done
+            echo 0
+          }
+          
+          # แปลง version format
+          if [[ "$INPUT_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            # 4-part version: X.Y.Z.W -> X.Y.Z
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+            BUILD_PART="${BASH_REMATCH[4]}"
+            CLEAN_VERSION="$MAJOR.$MINOR.$PATCH"
+            echo "⚠️ 4-part version detected: $INPUT_VERSION → $CLEAN_VERSION"
+            echo "💡 Build part ($BUILD_PART) moved to metadata"
+            
+          elif [[ "$INPUT_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-(alpha|beta|rc)\.?([0-9]+)?$ ]]; then
+            # Pre-release version: X.Y.Z-alpha.N -> X.Y.Z
+            BASE_VERSION="${BASH_REMATCH[1]}"
+            PRERELEASE="${BASH_REMATCH[2]}"
+            PRERELEASE_NUMBER="${BASH_REMATCH[3]:-1}"
+            CLEAN_VERSION="$BASE_VERSION"
+            echo "⚠️ Pre-release version detected: $INPUT_VERSION → $CLEAN_VERSION"
+            echo "💡 Pre-release info ($PRERELEASE) moved to metadata"
+            
+          elif [[ "$INPUT_VERSION" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+            # 2-part version: X.Y -> X.Y.0
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            CLEAN_VERSION="$MAJOR.$MINOR.0"
+            echo "⚠️ 2-part version detected: $INPUT_VERSION → $CLEAN_VERSION"
+            
+          elif [[ "$INPUT_VERSION" =~ ^([0-9]+)$ ]]; then
+            # 1-part version: X -> X.0.0
+            MAJOR="${BASH_REMATCH[1]}"
+            CLEAN_VERSION="$MAJOR.0.0"
+            echo "⚠️ 1-part version detected: $INPUT_VERSION → $CLEAN_VERSION"
+            
+          elif [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # Valid 3-part version
+            CLEAN_VERSION="$INPUT_VERSION"
+            echo "✅ Version format is valid: $CLEAN_VERSION"
+            
+          else
+            # Invalid format - use smart default
+            echo "❌ Invalid version format: $INPUT_VERSION"
+            IFS='.' read -ra MIN_PARTS <<< "$MIN_VERSION"
+            MAJOR=${MIN_PARTS[0]}
+            MINOR=${MIN_PARTS[1]}
+            PATCH=$((${MIN_PARTS[2]} + 1))
+            CLEAN_VERSION="$MAJOR.$MINOR.$PATCH"
+            echo "📝 Using smart default: $CLEAN_VERSION"
+          fi
+          
+          # ตรวจสอบว่า version ใหม่มากกว่า minimum หรือไม่
+          COMPARISON=$(version_compare "$CLEAN_VERSION" "$MIN_VERSION")
+          
+          if [[ $COMPARISON -le 0 ]]; then
+            echo "⚠️ Version $CLEAN_VERSION is not greater than minimum $MIN_VERSION"
+            
+            # Auto-increment จาก minimum version
+            IFS='.' read -ra MIN_PARTS <<< "$MIN_VERSION"
+            MAJOR=${MIN_PARTS[0]}
+            MINOR=${MIN_PARTS[1]}
+            PATCH=$((${MIN_PARTS[2]} + 1))
+            
+            CLEAN_VERSION="$MAJOR.$MINOR.$PATCH"
+            echo "🔄 Auto-incremented to: $CLEAN_VERSION"
+            echo "💡 Reason: App Store requires version > $MIN_VERSION"
+          fi
+          
+          # Final validation
+          if [[ ! "$CLEAN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Final validation failed for: $CLEAN_VERSION"
+            echo "📝 Falling back to: 67000.0.0"
+            CLEAN_VERSION="67000.0.0"
+          fi
+          
+          # Additional numeric validation
+          IFS='.' read -ra PARTS <<< "$CLEAN_VERSION"
+          for i in {0..2}; do
+            if [[ ! "${PARTS[$i]}" =~ ^[0-9]+$ ]] || [[ ${PARTS[$i]} -lt 0 ]]; then
+              echo "❌ Invalid version part at position $i: ${PARTS[$i]}"
+              CLEAN_VERSION="67000.0.0"
+              break
+            fi
+          done
+          
+          echo "CLEAN_VERSION=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+          echo "ORIGINAL_VERSION=$INPUT_VERSION" >> $GITHUB_OUTPUT
+          echo "MIN_VERSION=$MIN_VERSION" >> $GITHUB_OUTPUT
+          
+          # สร้าง build metadata
+          if [[ "$INPUT_VERSION" != "$CLEAN_VERSION" ]]; then
+            echo "BUILD_METADATA=Original: $INPUT_VERSION → Normalized: $CLEAN_VERSION (Min: $MIN_VERSION)" >> $GITHUB_OUTPUT
+          else
+            echo "BUILD_METADATA=Version: $CLEAN_VERSION (Min: $MIN_VERSION)" >> $GITHUB_OUTPUT
+          fi
+          
+          echo ""
+          echo "📋 Version Summary:"
+          echo "   Input:    $INPUT_VERSION"
+          echo "   Output:   $CLEAN_VERSION"
+          echo "   Minimum:  $MIN_VERSION"
+          echo "   Status:   ✅ Ready for App Store"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -98,8 +227,15 @@ jobs:
 
       - name: Update Version
         run: |
-          echo "📝 Updating version to: ${{ inputs.version }}+${{ inputs.version_code }}"
-          sed -i '' "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
+          CLEAN_VERSION="${{ steps.version.outputs.CLEAN_VERSION }}"
+          VERSION_CODE="${{ inputs.version_code }}"
+          
+          echo "📝 Updating version to: $CLEAN_VERSION+$VERSION_CODE"
+          echo "📋 Original version: ${{ steps.version.outputs.ORIGINAL_VERSION }}"
+          echo "📋 Build metadata: ${{ steps.version.outputs.BUILD_METADATA }}"
+          
+          # อัปเดต pubspec.yaml ด้วย clean version
+          sed -i '' "s/^version: .*/version: $CLEAN_VERSION+$VERSION_CODE/" pubspec.yaml
           grep "^version:" pubspec.yaml
           echo "✅ Version updated in pubspec.yaml"
 
@@ -113,23 +249,15 @@ jobs:
       - name: Test SSH Connection to Match Repository
         run: |
           echo "🔍 Testing SSH connection to Match repository..."
-          
-          # Test SSH connection to GitHub
           ssh -T git@github.com || true
-          
-          # Test specific repository access
           echo "Testing access to: ${{ secrets.MATCH_GIT_URL }}"
           git ls-remote "${{ secrets.MATCH_GIT_URL }}" || true
-          
-          # Show SSH key fingerprint
           ssh-add -l || true
 
-      # ✅ ไม่ต้องสร้าง API key file แล้ว - ใช้ content โดยตรง
       - name: Verify App Store Connect API Configuration
         run: |
           echo "🔑 Verifying App Store Connect API configuration..."
           
-          # Check if all required API variables are available
           if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}" ]; then
             echo "✅ API Key ID: Available"
           else
@@ -143,7 +271,6 @@ jobs:
           fi
           
           if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY }}" ]; then
-            # Check if it's valid base64
             if echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /dev/null 2>&1; then
               echo "✅ API Key Content: Available and valid base64"
               decoded_length=$(echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d | wc -c | tr -d ' ')
@@ -155,13 +282,11 @@ jobs:
             echo "❌ API Key Content: Missing"
           fi
 
-      # 📱 INSTALL COCOAPODS DEPENDENCIES
       - name: Install CocoaPods Dependencies
         run: |
           echo "📱 Installing CocoaPods dependencies..."
           cd ios
           
-          # Check if cache hit
           if [ -d "Pods" ] && [ -f "Podfile.lock" ]; then
             echo "✅ Pods cache found, verifying integrity..."
             pod install --deployment 2>/dev/null || {
@@ -176,7 +301,6 @@ jobs:
           
           echo "✅ CocoaPods installation completed"
 
-      # 🔧 Enhanced Ruby setup for Fastlane
       - name: Setup Ruby for Fastlane
         uses: ruby/setup-ruby@v1
         with:
@@ -195,6 +319,11 @@ jobs:
           FL_UPDATE_PLIST_PATH: Runner/Info.plist
         run: |
           echo "🍎 Building and deploying iOS..."
+          
+          # ใช้ clean version
+          CLEAN_VERSION="${{ steps.version.outputs.CLEAN_VERSION }}"
+          VERSION_CODE="${{ inputs.version_code }}"
+          ORIGINAL_VERSION="${{ steps.version.outputs.ORIGINAL_VERSION }}"
           
           # Determine deployment target based on branch
           case "${{ inputs.branch }}" in
@@ -215,9 +344,11 @@ jobs:
           # Pre-build validation
           echo "📋 Build configuration:"
           echo "- Target: $TARGET"
-          echo "- Version: ${{ inputs.version }}"
-          echo "- Build: ${{ inputs.version_code }}"
+          echo "- Clean Version: $CLEAN_VERSION"
+          echo "- Original Version: $ORIGINAL_VERSION"
+          echo "- Build: $VERSION_CODE"
           echo "- Branch: ${{ inputs.branch }}"
+          echo "- Minimum Version: ${{ steps.version.outputs.MIN_VERSION }}"
           echo "- API Key ID: ${APP_STORE_CONNECT_API_KEY_ID:0:8}..."
           echo "- API Key Content: $([ -n "$APP_STORE_CONNECT_API_KEY_CONTENT" ] && echo "Available" || echo "Missing")"
           
@@ -227,17 +358,16 @@ jobs:
           echo "🚀 Starting deployment..."
           bundle exec fastlane deploy \
             target:$TARGET \
-            version:"${{ inputs.version }}" \
-            build_number:"${{ inputs.version_code }}"
+            version:"$CLEAN_VERSION" \
+            build_number:"$VERSION_CODE" \
+            original_version:"$ORIGINAL_VERSION"
           
           echo "✅ iOS deployment completed!"
 
-      # 📊 VERIFY BUILD ARTIFACTS
       - name: Verify Build Artifacts
         run: |
           echo "🔍 Verifying build artifacts..."
           
-          # Check for IPA file
           if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
             echo "✅ IPA found: $ipa_file"
             ipa_size=$(ls -lh "$ipa_file" | awk '{print $5}')
@@ -246,13 +376,11 @@ jobs:
             echo "⚠️ No IPA file found (may be normal for direct upload)"
           fi
           
-          # Check Fastlane logs
           if [ -d "ios/fastlane/logs" ]; then
             echo "📋 Fastlane logs available"
             ls -la ios/fastlane/logs/
           fi
           
-          # Check build directory
           if [ -d "ios/build" ]; then
             echo "📦 Build directory contents:"
             ls -la ios/build/
@@ -261,7 +389,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ios-${{ inputs.version }}-${{ github.run_number }}
+          name: ios-${{ steps.version.outputs.CLEAN_VERSION }}-${{ github.run_number }}
           path: |
             ios/build/
             ios/fastlane/logs/
@@ -271,27 +399,27 @@ jobs:
       - name: Build Summary
         run: |
           echo "## 🍎 iOS Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Clean Version:** ${{ steps.version.outputs.CLEAN_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Original Version:** ${{ steps.version.outputs.ORIGINAL_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Number:** ${{ inputs.version_code }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Metadata:** ${{ steps.version.outputs.BUILD_METADATA }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Minimum Version:** ${{ steps.version.outputs.MIN_VERSION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Runner:** ${{ runner.os }} ($(sw_vers -productVersion))" >> $GITHUB_STEP_SUMMARY
           echo "- **Flutter:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
           
-          # Show deployment target
           case "${{ inputs.branch }}" in
             "main") echo "- **Target:** 🏪 App Store" >> $GITHUB_STEP_SUMMARY ;;
             "staging") echo "- **Target:** ✈️ TestFlight Beta" >> $GITHUB_STEP_SUMMARY ;;
             *) echo "- **Target:** 🔒 TestFlight Internal" >> $GITHUB_STEP_SUMMARY ;;
           esac
           
-          # Check for IPA and show size
           if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
             size=$(ls -lh "$ipa_file" | awk '{print $5}')
             echo "- **IPA Size:** $size" >> $GITHUB_STEP_SUMMARY
           fi
           
-          # Performance metrics
           if [ -f "ios/fastlane/logs/"*.log ]; then
             echo "- **Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
           else
@@ -305,11 +433,6 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up sensitive files..."
-          # ✅ ไม่ต้อง cleanup API key file แล้วเพราะไม่ได้สร้าง
-          # SSH keys are cleaned up automatically by ssh-agent action
-          
-          # Clean up any temporary build files
           rm -rf ios/build/temp 2>/dev/null || true
           rm -rf ios/fastlane/tmp 2>/dev/null || true
-          
           echo "✅ Cleanup completed"
