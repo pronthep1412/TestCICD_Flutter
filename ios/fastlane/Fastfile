@@ -1,4 +1,4 @@
-# ios/fastlane/Fastfile - Fixed using React Native pattern
+# ios/fastlane/Fastfile - Updated with API key object support for ALL actions
 default_platform(:ios)
 
 platform :ios do
@@ -17,7 +17,7 @@ platform :ios do
     UI.message("🎯 Target: #{target}")
     UI.message("📋 Version: #{version} (#{build_number})")
     
-    # Setup certificates and provisioning profiles with Match
+    # 🔧 Setup certificates and provisioning profiles with Match + API Key
     setup_certificates_with_api_key
     
     # Update version numbers
@@ -34,11 +34,8 @@ platform :ios do
       export_method: "app-store",
       output_directory: "build",
       output_name: "Runner.ipa",
-      silent: false
+      silent: true
     )
-    
-    # IPA VALIDATION
-    validate_ipa_build
     
     # Deploy based on target
     case target
@@ -55,205 +52,39 @@ platform :ios do
     UI.success("✅ Successfully deployed to #{target}!")
   end
   
-  # 🎯 FIXED: IPA Validation with correct path
-  private_lane :validate_ipa_build do
-    ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH] || "build/Runner.ipa"
-    
-    UI.header("🔍 IPA BUILD VALIDATION")
-    UI.message("📦 Checking IPA at: #{ipa_path}")
-    
-    unless File.exist?(ipa_path)
-      UI.message("🔍 Debug - Files in build directory:")
-      if Dir.exist?("build")
-        Dir.glob("build/*").each { |f| UI.message("   #{f}") }
-      end
-      
-      alternative_paths = [
-        "../build/Runner.ipa",
-        "build/Runner.ipa", 
-        "./build/Runner.ipa"
-      ]
-      
-      found_path = alternative_paths.find { |path| File.exist?(path) }
-      
-      if found_path
-        UI.message("✅ Found IPA at alternative path: #{found_path}")
-        ipa_path = found_path
-      else
-        UI.user_error!("❌ IPA file not found. Checked paths: #{[ipa_path] + alternative_paths}")
-      end
-    end
-    
-    # File size check
-    ipa_size = (File.size(ipa_path) / 1024.0 / 1024.0).round(2)
-    UI.message("📦 IPA Size: #{ipa_size} MB")
-    
-    # Basic validation
-    if File.size(ipa_path) > 10 * 1024 * 1024  # > 10MB
-      UI.success("✅ IPA size looks reasonable (#{ipa_size} MB)")
-    else
-      UI.error("⚠️ IPA size seems small (#{ipa_size} MB) - might be incomplete")
-    end
-    
-    # Quick zip test
-    begin
-      result = sh("unzip -t '#{ipa_path}' >/dev/null 2>&1 && echo 'VALID' || echo 'INVALID'", log: false).strip
-      if result == "VALID"
-        UI.success("✅ IPA zip structure is valid")
-      else
-        UI.error("❌ IPA zip structure is corrupted")
-      end
-    rescue => e
-      UI.message("⚠️ Could not validate IPA structure: #{e.message}")
-    end
-    
-    UI.success("🔍 IPA validation completed")
-  end
-  
-  # 🎯 FIXED: Using React Native pattern - API key object only
+  # 🔧 Helper method สำหรับสร้าง App Store Connect API key object
   private_lane :create_api_key_object do
     api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
     api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
     api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
     
-    UI.header("🔑 APP STORE CONNECT API KEY SETUP")
-    UI.message("📋 API Key Configuration:")
-    UI.message("   Key ID: #{api_key_id ? "#{api_key_id[0..7]}..." : '❌ Missing'}")
-    UI.message("   Issuer ID: #{api_issuer_id ? "#{api_issuer_id[0..7]}..." : '❌ Missing'}")
-    UI.message("   Key Content: #{api_key_content_base64 ? "✅ Available (#{api_key_content_base64.length} chars)" : '❌ Missing'}")
-    
     if api_key_id && api_issuer_id && api_key_content_base64
       begin
         require 'base64'
         api_key_content = Base64.decode64(api_key_content_base64)
         
-        UI.message("🔍 Validating API key content...")
-        UI.message("   Decoded length: #{api_key_content.length} characters")
-        
-        if api_key_content.include?("BEGIN PRIVATE KEY") && api_key_content.include?("END PRIVATE KEY")
-          UI.success("✅ API key content appears to be valid P8 format")
-        else
-          UI.error("❌ API key content doesn't appear to be valid P8 format")
-        end
-        
-        # 🎯 EXACT SAME OBJECT AS REACT NATIVE - NO FILE CREATION
-        app_store_connect_api_key = {
-          key_id: api_key_id,
-          issuer_id: api_issuer_id,
-          key: api_key_content,  # Raw content - NO file path
-          duration: 1200,        # 20 minutes
-          in_house: false
-        }
-        
-        UI.success("✅ App Store Connect API key object created successfully")
-        app_store_connect_api_key
-        
-      rescue => e
-        UI.error("❌ Failed to create API key object: #{e.message}")
-        nil
-      end
-    else
-      UI.error("⚠️ API key not available")
-      nil
-    end
-  end
-  
-  # Helper method for setup certificates with API key
-  private_lane :setup_certificates_with_api_key do |options|
-    readonly_mode = options[:readonly] || true
-    cert_type = options[:type] || "appstore"
-    
-    UI.header("🔐 CERTIFICATES & PROVISIONING SETUP")
-    UI.message("   Type: #{cert_type}")
-    UI.message("   Readonly: #{readonly_mode}")
-    
-    # Create match options
-    match_options = {
-      type: cert_type,
-      readonly: readonly_mode,
-      verbose: true
-    }
-    
-    # Add API key if available
-    api_key_object = create_api_key_object
-    if api_key_object
-      match_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for Match authentication")
-    else
-      UI.message("⚠️ Using traditional auth for Match (requires FASTLANE_PASSWORD)")
-    end
-    
-    # Run match
-    begin
-      match(match_options)
-      UI.success("✅ Certificates setup completed!")
-    rescue => e
-      UI.error("❌ Match failed: #{e.message}")
-      raise e
-    end
-  end
-  
-  # 🎯 FIXED: TestFlight Internal using React Native pattern
-  private_lane :deploy_to_testflight_internal do
-    UI.header("🔒 TESTFLIGHT INTERNAL UPLOAD")
-    
-    # Get IPA path
-    ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
-    unless ipa_path && File.exist?(ipa_path)
-      possible_paths = ["build/Runner.ipa", "../build/Runner.ipa"]
-      ipa_path = possible_paths.find { |p| File.exist?(p) }
-      unless ipa_path
-        UI.user_error!("❌ IPA file not found")
-      end
-    end
-    
-    UI.message("📦 IPA file: #{ipa_path}")
-    UI.message("📦 IPA size: #{(File.size(ipa_path) / 1024.0 / 1024.0).round(2)} MB")
-    
-    # 🎯 USE EXACT SAME PATTERN AS REACT NATIVE
-    upload_options = {
-      ipa: ipa_path,
-      skip_waiting_for_build_processing: true,
-      groups: ["Internal Testers", "Developers"],  # Same as RN
-      distribute_external: false,
-      notify_external_testers: false,
-      changelog: "Automated build from #{ENV['GITHUB_REF_NAME'] || 'develop'} branch",  # Same as RN
-      use_transporter: true,      # บังคับใช้ transporter
-      transporter: "transporter"  # ระบุชื่อ executable
-    }
-    
-    # 🔧 EXACT SAME API KEY SETUP AS REACT NATIVE VERSION
-    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
-    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
-    api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
-    
-    if api_key_id && api_issuer_id && api_key_content_base64
-      begin
-        # Decode API key content (same as RN)
-        require 'base64'
-        api_key_content = Base64.decode64(api_key_content_base64)
-        
-        UI.message("✅ Creating App Store Connect API configuration for TestFlight")
+        UI.message("✅ Creating App Store Connect API configuration")
         UI.message("   Key ID: #{api_key_id}")
         UI.message("   Issuer ID: #{api_issuer_id}")
         UI.message("   Content length: #{api_key_content.length} characters")
         
-        # 🎯 EXACT SAME API OBJECT AS REACT NATIVE
+        # สร้าง App Store Connect API object
         app_store_connect_api_key = {
           key_id: api_key_id,
           issuer_id: api_issuer_id,
-          key: api_key_content,    # Raw content, NOT file path
-          duration: 1200,          # 20 minutes (same as RN)
+          key: api_key_content,
+          duration: 1200, # 20 minutes
           in_house: false
         }
         
-        upload_options[:api_key] = app_store_connect_api_key
-        UI.success("✅ Using App Store Connect API for TestFlight upload")
+        UI.success("✅ App Store Connect API key object created")
+        app_store_connect_api_key
         
       rescue => e
-        UI.error("❌ Failed to setup API key: #{e.message}")
+        UI.error("❌ Failed to create API key object: #{e.message}")
         UI.error("   Error class: #{e.class}")
-        UI.message("⚠️ Falling back to traditional auth")
+        UI.message("⚠️ Will use traditional auth")
+        nil
       end
     else
       UI.message("⚠️ API key not available, using traditional auth")
@@ -262,167 +93,148 @@ platform :ios do
       missing_items << "ISSUER_ID" unless api_issuer_id  
       missing_items << "KEY_CONTENT" unless api_key_content_base64
       UI.message("Missing: #{missing_items.join(', ')}")
-    end
-    
-    # 🚀 UPLOAD (same method as RN)
-    begin
-      UI.message("🚀 Starting upload to TestFlight...")
-      upload_to_testflight(upload_options)
-      UI.success("✅ Upload completed successfully!")
-      
-    rescue => e
-      UI.error("❌ Upload failed: #{e.message}")
-      
-      # Same error handling as RN
-      error_message = "❌ iOS deployment failed: #{e.message}"
-      UI.error(error_message)
-      raise e
+      nil
     end
   end
   
-  # 🎯 FIXED: TestFlight Beta using React Native pattern
-  private_lane :deploy_to_testflight_beta do
-    UI.header("✈️ TESTFLIGHT BETA UPLOAD")
+  # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
+  private_lane :setup_certificates_with_api_key do |options|
+    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
+    cert_type = options[:type] || "appstore"
     
-    ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
-    unless ipa_path && File.exist?(ipa_path)
-      possible_paths = ["build/Runner.ipa", "../build/Runner.ipa"]
-      ipa_path = possible_paths.find { |p| File.exist?(p) }
-      unless ipa_path
-        UI.user_error!("❌ IPA file not found")
-      end
-    end
+    UI.message("🔐 Setting up certificates...")
+    UI.message("   Type: #{cert_type}")
+    UI.message("   Readonly: #{readonly_mode}")
     
-    UI.message("📦 IPA file: #{ipa_path}")
-    UI.message("📦 IPA size: #{(File.size(ipa_path) / 1024.0 / 1024.0).round(2)} MB")
-    
-    upload_options = {
-      ipa: ipa_path,
-      skip_waiting_for_build_processing: false,  # Wait for beta
-      groups: ["Beta Testers", "QA Team"],
-      distribute_external: true,
-      notify_external_testers: true,
-      changelog: "Beta build from #{ENV['GITHUB_REF_NAME'] || 'preprod'} branch",
-      use_transporter: true,      # บังคับใช้ transporter
-      transporter: "transporter"  # ระบุชื่อ executable
+    # สร้าง match options
+    match_options = {
+      type: cert_type,
+      readonly: readonly_mode
     }
     
-    # Same API key setup as internal
-    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
-    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
-    api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
-    
-    if api_key_id && api_issuer_id && api_key_content_base64
-      begin
-        require 'base64'
-        api_key_content = Base64.decode64(api_key_content_base64)
-        
-        app_store_connect_api_key = {
-          key_id: api_key_id,
-          issuer_id: api_issuer_id,
-          key: api_key_content,
-          duration: 1200,
-          in_house: false
-        }
-        
-        upload_options[:api_key] = app_store_connect_api_key
-        UI.success("✅ Using App Store Connect API for TestFlight Beta upload")
-        
-      rescue => e
-        UI.error("❌ Failed to setup API key: #{e.message}")
-        UI.message("⚠️ Falling back to traditional auth")
-      end
+    # เพิ่ม API key ถ้ามี
+    api_key_object = create_api_key_object
+    if api_key_object
+      match_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for Match authentication")
+    else
+      UI.message("⚠️ Using traditional auth for Match (requires FASTLANE_PASSWORD)")
     end
     
-    begin
-      UI.message("🚀 Starting upload to TestFlight Beta...")
-      upload_to_testflight(upload_options)
-      UI.success("✅ Beta upload completed successfully!")
-      
-    rescue => e
-      UI.error("❌ Beta upload failed: #{e.message}")
-      raise e
-    end
+    # เรียกใช้ match
+    match(match_options)
+    UI.success("✅ Certificates setup completed!")
   end
   
-  # 🎯 FIXED: App Store using React Native pattern
+  # 🔧 Private lanes for different deployment targets with API key support
   private_lane :deploy_to_app_store do
-    UI.header("🏪 APP STORE UPLOAD")
-    
-    ipa_path = lane_context[SharedValues::IPA_OUTPUT_PATH]
-    unless ipa_path && File.exist?(ipa_path)
-      possible_paths = ["build/Runner.ipa", "../build/Runner.ipa"]
-      ipa_path = possible_paths.find { |p| File.exist?(p) }
-      unless ipa_path
-        UI.user_error!("❌ IPA file not found")
-      end
-    end
-    
-    UI.message("📦 IPA file: #{ipa_path}")
-    UI.message("📦 IPA size: #{(File.size(ipa_path) / 1024.0 / 1024.0).round(2)} MB")
+    UI.message("🏪 Uploading to App Store...")
     
     upload_options = {
-      ipa: ipa_path,
-      force: true,
-      submit_for_review: false,
-      automatic_release: false,
+      ipa: "build/Runner.ipa",
       skip_metadata: true,
       skip_screenshots: true,
-      precheck_include_in_app_purchases: false,
-      use_transporter: true,      # บังคับใช้ transporter
-      transporter: "transporter"  # ระบุชื่อ executable
+      submit_for_review: false,
+      automatic_release: false,
+      force: true,
+      precheck_include_in_app_purchases: false
     }
     
-    # Same API key setup
-    api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
-    api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
-    api_key_content_base64 = ENV['APP_STORE_CONNECT_API_KEY_CONTENT']
-    
-    if api_key_id && api_issuer_id && api_key_content_base64
-      begin
-        require 'base64'
-        api_key_content = Base64.decode64(api_key_content_base64)
-        
-        app_store_connect_api_key = {
-          key_id: api_key_id,
-          issuer_id: api_issuer_id,
-          key: api_key_content,
-          duration: 1200,
-          in_house: false
-        }
-        
-        upload_options[:api_key] = app_store_connect_api_key
-        UI.success("✅ Using App Store Connect API for App Store upload")
-        
-      rescue => e
-        UI.error("❌ Failed to setup API key: #{e.message}")
-        UI.message("⚠️ Falling back to traditional auth")
-      end
+    # ✅ ใช้ API key object แทน traditional auth
+    api_key_object = create_api_key_object
+    if api_key_object
+      upload_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for App Store upload")
+    else
+      UI.message("⚠️ Using traditional auth for App Store upload")
     end
     
-    begin
-      UI.message("🚀 Starting upload to App Store...")
-      upload_to_app_store(upload_options)
-      UI.success("✅ App Store upload completed successfully!")
-      
-    rescue => e
-      UI.error("❌ App Store upload failed: #{e.message}")
-      raise e
-    end
+    upload_to_app_store(upload_options)
   end
   
-  # Helper lanes
+  private_lane :deploy_to_testflight_beta do
+    UI.message("✈️ Uploading to TestFlight (Beta)...")
+    
+    upload_options = {
+      ipa: "build/Runner.ipa",
+      groups: ["Beta Testers"],
+      distribute_external: true,
+      notify_external_testers: true,
+      changelog: "Beta release - please test and provide feedback",
+      skip_waiting_for_build_processing: false
+    }
+    
+    # ✅ ใช้ API key object
+    api_key_object = create_api_key_object
+    if api_key_object
+      upload_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for TestFlight Beta upload")
+    else
+      UI.message("⚠️ Using traditional auth for TestFlight Beta upload")
+    end
+    
+    upload_to_testflight(upload_options)
+  end
+  
+  private_lane :deploy_to_testflight_internal do
+    UI.message("🔒 Uploading to TestFlight (Internal)...")
+    
+    upload_options = {
+      ipa: "build/Runner.ipa",
+      distribute_external: false,
+      notify_external_testers: false,
+      changelog: "Internal testing build",
+      skip_waiting_for_build_processing: true
+    }
+    
+    # ✅ ใช้ API key object
+    api_key_object = create_api_key_object
+    if api_key_object
+      upload_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for TestFlight Internal upload")
+    else
+      UI.message("⚠️ Using traditional auth for TestFlight Internal upload")
+    end
+    
+    upload_to_testflight(upload_options)
+  end
+  
+  # Helper lanes for specific branches
+  desc "Deploy to App Store (main branch)"
+  lane :deploy_production do
+    deploy(target: "app_store")
+  end
+  
+  desc "Deploy to TestFlight Beta (staging branch)"
+  lane :deploy_staging do
+    deploy(target: "testflight_beta")
+  end
+  
+  desc "Deploy to TestFlight Internal (develop branch)"
+  lane :deploy_development do
+    deploy(target: "testflight_internal")
+  end
+  
+  # Debug/testing lanes
   desc "Build only (no deploy)"
   lane :build_only do |options|
     version = options[:version] || "1.0.0"
     build_number = options[:build_number] || "1"
     
-    setup_certificates_with_api_key
+    UI.message("🔨 Building iOS app...")
+    UI.message("📋 Version: #{version} (#{build_number})")
+    
+    # 🔧 Setup certificates พร้อม API key (ใช้ readonly เพราะมี cert แล้ว)
+    setup_certificates_with_api_key(readonly: true)
+    
+    # Update version
     increment_version_number(version_number: version)
     increment_build_number(build_number: build_number)
     
+    # Build Flutter
     sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
     
+    # Build with Xcode
     build_app(
       workspace: "Runner.xcworkspace",
       scheme: "Runner",
@@ -431,23 +243,68 @@ platform :ios do
       output_name: "Runner.ipa"
     )
     
-    validate_ipa_build
-    
-    UI.success("✅ IPA ready for manual upload!")
-    UI.message("📦 Location: #{lane_context[SharedValues::IPA_OUTPUT_PATH]}")
+    UI.success("✅ iOS build completed!")
   end
   
   desc "Setup certificates only"
   lane :setup_certificates do |options|
-    setup_certificates_with_api_key(options)
+    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true
+    cert_type = options[:type] || "appstore"
+    
+    # 🔧 ใช้ helper method ใหม่
+    setup_certificates_with_api_key(readonly: readonly_mode, type: cert_type)
   end
   
-  # Enhanced error handling with cleanup
+  # 🔧 Submit for review lane with API key support
+  desc "Submit for App Store review"
+  lane :submit_for_review do
+    UI.message("📋 Submitting for App Store review...")
+    
+    upload_options = {
+      skip_binary_upload: true,
+      submit_for_review: true,
+      automatic_release: false,
+      force: true,
+      submission_information: submission_info
+    }
+    
+    # ✅ ใช้ API key object
+    api_key_object = create_api_key_object
+    if api_key_object
+      upload_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for review submission")
+    else
+      UI.message("⚠️ Using traditional auth for review submission")
+    end
+    
+    upload_to_app_store(upload_options)
+    UI.success("✅ App submitted for review!")
+  end
+  
+  # 🔧 Submission information for App Store review
+  private_lane :submission_info do
+    {
+      add_id_info_limits_tracking: true,
+      add_id_info_serves_ads: false,
+      add_id_info_tracks_action: true,
+      add_id_info_tracks_install: true,
+      add_id_info_uses_idfa: true,
+      content_rights_has_rights: true,
+      content_rights_contains_third_party_content: true,
+      export_compliance_platform: 'ios',
+      export_compliance_compliance_required: false,
+      export_compliance_encryption_updated: false,
+      export_compliance_uses_encryption: false,
+      export_compliance_is_exempt: false,
+      export_compliance_contains_third_party_cryptography: false,
+      export_compliance_contains_proprietary_cryptography: false,
+      export_compliance_available_on_french_store: false
+    }
+  end
+  
+  # Error handling
   error do |lane, exception|
-    UI.header("❌ FASTLANE ERROR")
-    UI.error("Lane: #{lane}")
-    UI.error("Error: #{exception.message}")
-    UI.error("Class: #{exception.class}")
+    UI.error("❌ Error in #{lane}: #{exception.message}")
     
     # Clean up build artifacts on error
     if File.exist?("build")

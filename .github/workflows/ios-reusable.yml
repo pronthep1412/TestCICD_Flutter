@@ -1,4 +1,4 @@
-# .github/workflows/ios-reusable.yml - Complete Enhanced with comprehensive debugging
+# .github/workflows/ios-reusable.yml - Updated with API key content support
 name: iOS Build & Deploy
 
 on:
@@ -69,8 +69,6 @@ jobs:
           echo "- macOS: $(sw_vers -productVersion)"
           echo "- Xcode: $(xcodebuild -version | head -1)"
           echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
-          echo "- Ruby version: $(ruby --version)"
-          echo "- Bundler version: $(bundle --version 2>/dev/null || echo 'Not installed')"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -111,157 +109,51 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.MATCH_PRIVATE_KEY }}
 
-      # 🔍 ENHANCED API KEY VALIDATION
-      - name: Comprehensive API Key Validation
-        env:
-          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
-        run: |
-          echo "🔍 Comprehensive API Key validation..."
-          
-          # Check basic availability
-          echo "📋 Basic checks:"
-          if [ -n "$APP_STORE_CONNECT_API_KEY_ID" ]; then
-            echo "✅ API Key ID: ${APP_STORE_CONNECT_API_KEY_ID:0:8}..."
-            
-            # Validate format (should be 10 chars, alphanumeric)
-            if [[ "$APP_STORE_CONNECT_API_KEY_ID" =~ ^[A-Z0-9]{10}$ ]]; then
-              echo "✅ API Key ID format: Valid"
-            else
-              echo "❌ API Key ID format: Invalid (should be 10 alphanumeric chars)"
-            fi
-          else
-            echo "❌ API Key ID: Missing"
-          fi
-          
-          if [ -n "$APP_STORE_CONNECT_API_ISSUER_ID" ]; then
-            echo "✅ Issuer ID: ${APP_STORE_CONNECT_API_ISSUER_ID:0:8}..."
-            
-            # Validate format (should be UUID format)
-            if [[ "$APP_STORE_CONNECT_API_ISSUER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-              echo "✅ Issuer ID format: Valid UUID"
-            else
-              echo "❌ Issuer ID format: Invalid (should be UUID)"
-            fi
-          else
-            echo "❌ Issuer ID: Missing"
-          fi
-          
-          if [ -n "$APP_STORE_CONNECT_API_KEY_CONTENT" ]; then
-            echo "✅ API Key Content: Available (${#APP_STORE_CONNECT_API_KEY_CONTENT} chars)"
-            
-            # Test base64 decoding
-            if decoded_content=$(echo "$APP_STORE_CONNECT_API_KEY_CONTENT" | base64 -d 2>/dev/null); then
-              echo "✅ Base64 decoding: Success"
-              decoded_length=${#decoded_content}
-              echo "   Decoded length: $decoded_length characters"
-              
-              # Check if it looks like a P8 key
-              if echo "$decoded_content" | grep -q "BEGIN PRIVATE KEY" && echo "$decoded_content" | grep -q "END PRIVATE KEY"; then
-                echo "✅ P8 format: Valid (contains BEGIN/END PRIVATE KEY)"
-                
-                # Count lines (typical P8 has ~9-10 lines)
-                line_count=$(echo "$decoded_content" | wc -l | tr -d ' ')
-                echo "   Line count: $line_count"
-                
-                if [ "$line_count" -ge 8 ] && [ "$line_count" -le 15 ]; then
-                  echo "✅ P8 structure: Looks valid"
-                else
-                  echo "⚠️ P8 structure: Unusual line count"
-                fi
-              else
-                echo "❌ P8 format: Invalid (missing BEGIN/END PRIVATE KEY)"
-                echo "   First 100 chars: ${decoded_content:0:100}"
-              fi
-            else
-              echo "❌ Base64 decoding: Failed"
-            fi
-          else
-            echo "❌ API Key Content: Missing"
-          fi
-          
-          # 🔍 TEST API KEY WITH ALTOOL
-          if [ -n "$APP_STORE_CONNECT_API_KEY_ID" ] && [ -n "$APP_STORE_CONNECT_API_ISSUER_ID" ] && [ -n "$APP_STORE_CONNECT_API_KEY_CONTENT" ]; then
-            echo ""
-            echo "🧪 Testing API Key with altool..."
-            
-            # Create temporary key file
-            temp_key_file="/tmp/test_api_key.p8"
-            echo "$APP_STORE_CONNECT_API_KEY_CONTENT" | base64 -d > "$temp_key_file" 2>/dev/null
-            
-            if [ -f "$temp_key_file" ]; then
-              echo "✅ Temporary key file created"
-              
-              # Set environment for altool
-              export API_PRIVATE_KEYS_DIR="/tmp"
-              
-              # Test API access
-              echo "   Testing App Store Connect API access..."
-              
-              # Try to list apps
-              if altool_output=$(xcrun altool --list-apps --apiKey "$APP_STORE_CONNECT_API_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID" -t ios 2>&1); then
-                echo "✅ altool API test: Success"
-                
-                if echo "$altool_output" | grep -q "No Applications found"; then
-                  echo "⚠️ No applications found (API works but no apps in account)"
-                else
-                  echo "✅ Found applications in account"
-                  # Show app count (but not details for security)
-                  app_count=$(echo "$altool_output" | grep -c "Bundle ID" || echo "0")
-                  echo "   App count: $app_count"
-                fi
-              else
-                echo "❌ altool API test: Failed"
-                echo "   Error output:"
-                echo "$altool_output" | head -10  # Limit error output
-                
-                # Analyze common error patterns
-                if echo "$altool_output" | grep -qi "unauthorized"; then
-                  echo "💡 Issue: API key lacks proper permissions"
-                elif echo "$altool_output" | grep -qi "invalid"; then
-                  echo "💡 Issue: API key format or content invalid"
-                elif echo "$altool_output" | grep -qi "team"; then
-                  echo "💡 Issue: Team/organization access problem"
-                else
-                  echo "💡 Issue: Unknown API error"
-                fi
-              fi
-              
-              # Cleanup
-              rm -f "$temp_key_file"
-            else
-              echo "❌ Failed to create temporary key file"
-            fi
-          else
-            echo "⚠️ Skipping altool test - missing required API key components"
-          fi
-
-      # 🔍 TEST SSH CONNECTION
+      # 🔍 DEBUG SSH CONNECTION
       - name: Test SSH Connection to Match Repository
         run: |
           echo "🔍 Testing SSH connection to Match repository..."
           
           # Test SSH connection to GitHub
-          echo "Testing GitHub SSH connection..."
-          if ssh -T git@github.com -o StrictHostKeyChecking=no 2>&1 | grep -q "successfully authenticated"; then
-            echo "✅ GitHub SSH: Success"
-          else
-            echo "⚠️ GitHub SSH: May have issues (but this is often normal)"
-          fi
+          ssh -T git@github.com || true
           
           # Test specific repository access
-          echo "Testing access to Match repository..."
-          if git ls-remote "${{ secrets.MATCH_GIT_URL }}" >/dev/null 2>&1; then
-            echo "✅ Match repository: Accessible"
+          echo "Testing access to: ${{ secrets.MATCH_GIT_URL }}"
+          git ls-remote "${{ secrets.MATCH_GIT_URL }}" || true
+          
+          # Show SSH key fingerprint
+          ssh-add -l || true
+
+      # ✅ ไม่ต้องสร้าง API key file แล้ว - ใช้ content โดยตรง
+      - name: Verify App Store Connect API Configuration
+        run: |
+          echo "🔑 Verifying App Store Connect API configuration..."
+          
+          # Check if all required API variables are available
+          if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}" ]; then
+            echo "✅ API Key ID: Available"
           else
-            echo "❌ Match repository: Not accessible"
-            echo "   URL: ${{ secrets.MATCH_GIT_URL }}"
+            echo "❌ API Key ID: Missing"
           fi
           
-          # Show SSH key info
-          echo "SSH key info:"
-          ssh-add -l 2>/dev/null || echo "No SSH keys loaded"
+          if [ -n "${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}" ]; then
+            echo "✅ Issuer ID: Available"
+          else
+            echo "❌ Issuer ID: Missing"
+          fi
+          
+          if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY }}" ]; then
+            # Check if it's valid base64
+            if echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /dev/null 2>&1; then
+              echo "✅ API Key Content: Available and valid base64"
+              decoded_length=$(echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d | wc -c | tr -d ' ')
+              echo "   Decoded length: $decoded_length characters"
+            else
+              echo "❌ API Key Content: Invalid base64 format"
+            fi
+          else
+            echo "❌ API Key Content: Missing"
+          fi
 
       # 📱 INSTALL COCOAPODS DEPENDENCIES
       - name: Install CocoaPods Dependencies
@@ -269,19 +161,14 @@ jobs:
           echo "📱 Installing CocoaPods dependencies..."
           cd ios
           
-          # Show current CocoaPods version
-          echo "CocoaPods version: $(pod --version)"
-          
           # Check if cache hit
           if [ -d "Pods" ] && [ -f "Podfile.lock" ]; then
             echo "✅ Pods cache found, verifying integrity..."
-            if pod install --deployment 2>/dev/null; then
-              echo "✅ Cache is valid"
-            else
+            pod install --deployment 2>/dev/null || {
               echo "⚠️ Cache invalid, reinstalling..."
               rm -rf Pods Podfile.lock
               pod install
-            fi
+            }
           else
             echo "🔄 Installing fresh Pods..."
             pod install
@@ -297,7 +184,7 @@ jobs:
           bundler-cache: true
           working-directory: ios
 
-      # 🔨 BUILD & DEPLOY WITH ENHANCED LOGGING
+      # 🔨 BUILD & DEPLOY WITH FASTLANE
       - name: Build and Deploy iOS
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
@@ -306,7 +193,6 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
           FL_UPDATE_PLIST_PATH: Runner/Info.plist
-          FASTLANE_VERBOSE: true
         run: |
           echo "🍎 Building and deploying iOS..."
           
@@ -326,104 +212,25 @@ jobs:
               ;;
           esac
           
-          # Log build start time
-          BUILD_START_TIME=$(date)
-          echo "⏱️ Build started at: $BUILD_START_TIME"
-          
           # Pre-build validation
-          echo ""
-          echo "📋 Final build configuration:"
+          echo "📋 Build configuration:"
           echo "- Target: $TARGET"
           echo "- Version: ${{ inputs.version }}"
           echo "- Build: ${{ inputs.version_code }}"
           echo "- Branch: ${{ inputs.branch }}"
           echo "- API Key ID: ${APP_STORE_CONNECT_API_KEY_ID:0:8}..."
+          echo "- API Key Content: $([ -n "$APP_STORE_CONNECT_API_KEY_CONTENT" ] && echo "Available" || echo "Missing")"
           
-          # Navigate to iOS directory
+          # Deploy with Fastlane
           cd ios
           
-          # Show Fastlane version
-          echo ""
-          echo "📋 Fastlane info:"
-          bundle exec fastlane --version
-          
-          # 🚀 START DEPLOYMENT
-          echo ""
           echo "🚀 Starting deployment..."
-          echo "⏱️ Fastlane started at: $(date)"
-          
-          # Run with enhanced error handling
-          if bundle exec fastlane deploy \
+          bundle exec fastlane deploy \
             target:$TARGET \
             version:"${{ inputs.version }}" \
-            build_number:"${{ inputs.version_code }}"; then
-            
-            echo ""
-            echo "✅ iOS deployment completed successfully!"
-            echo "⏱️ Fastlane finished at: $(date)"
-            
-          else
-            FASTLANE_EXIT_CODE=$?
-            echo ""
-            echo "❌ Fastlane deployment failed with exit code: $FASTLANE_EXIT_CODE"
-            echo "⏱️ Fastlane failed at: $(date)"
-            
-            # 🔍 POST-FAILURE ANALYSIS
-            echo ""
-            echo "🔍 Post-failure analysis:"
-            
-            # Check for common files/logs
-            echo "📋 Checking for debug information..."
-            
-            if [ -d "fastlane/logs" ]; then
-              echo "✅ Fastlane logs directory found"
-              ls -la fastlane/logs/
-              
-              # Show recent log content (last 50 lines)
-              if ls fastlane/logs/*.log >/dev/null 2>&1; then
-                echo ""
-                echo "📋 Recent fastlane log content (last 50 lines):"
-                tail -50 fastlane/logs/*.log | head -50
-              fi
-            else
-              echo "❌ No fastlane logs directory found"
-            fi
-            
-            if [ -d "build" ]; then
-              echo "✅ Build directory found"
-              ls -la build/
-            else
-              echo "❌ No build directory found"
-            fi
-            
-            exit $FASTLANE_EXIT_CODE
-          fi
-
-      # 🔍 POST-BUILD ANALYSIS
-      - name: Post-Build Analysis
-        if: always()
-        run: |
-          echo "🔍 Post-build analysis..."
+            build_number:"${{ inputs.version_code }}"
           
-          echo "📋 Build artifacts:"
-          if [ -d "ios/build" ]; then
-            echo "✅ Build directory exists"
-            find ios/build -type f -name "*.ipa" -o -name "*.app" -o -name "*.dSYM*" | while read file; do
-              size=$(ls -lh "$file" 2>/dev/null | awk '{print $5}' || echo "unknown")
-              echo "   $file ($size)"
-            done
-          else
-            echo "❌ No build directory found"
-          fi
-          
-          echo ""
-          echo "📋 Fastlane logs:"
-          if [ -d "ios/fastlane/logs" ]; then
-            echo "✅ Fastlane logs directory exists"
-            ls -la ios/fastlane/logs/
-          else
-            echo "❌ No fastlane logs directory found"
-          fi
+          echo "✅ iOS deployment completed!"
 
       # 📊 VERIFY BUILD ARTIFACTS
       - name: Verify Build Artifacts
@@ -435,13 +242,6 @@ jobs:
             echo "✅ IPA found: $ipa_file"
             ipa_size=$(ls -lh "$ipa_file" | awk '{print $5}')
             echo "   Size: $ipa_size"
-            
-            # Basic IPA validation
-            if unzip -t "$ipa_file" >/dev/null 2>&1; then
-              echo "✅ IPA file integrity: Valid"
-            else
-              echo "❌ IPA file integrity: Corrupted"
-            fi
           else
             echo "⚠️ No IPA file found (may be normal for direct upload)"
           fi
@@ -449,13 +249,17 @@ jobs:
           # Check Fastlane logs
           if [ -d "ios/fastlane/logs" ]; then
             echo "📋 Fastlane logs available"
-            log_count=$(ls -1 ios/fastlane/logs/ 2>/dev/null | wc -l | tr -d ' ')
-            echo "   Log files: $log_count"
+            ls -la ios/fastlane/logs/
+          fi
+          
+          # Check build directory
+          if [ -d "ios/build" ]; then
+            echo "📦 Build directory contents:"
+            ls -la ios/build/
           fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: ios-${{ inputs.version }}-${{ github.run_number }}
           path: |
@@ -465,7 +269,6 @@ jobs:
           retention-days: 30
 
       - name: Build Summary
-        if: always()
         run: |
           echo "## 🍎 iOS Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Version:** ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
@@ -486,9 +289,13 @@ jobs:
           if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
             size=$(ls -lh "$ipa_file" | awk '{print $5}')
             echo "- **IPA Size:** $size" >> $GITHUB_STEP_SUMMARY
-            echo "- **Build Status:** ✅ IPA Generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Performance metrics
+          if [ -f "ios/fastlane/logs/"*.log ]; then
+            echo "- **Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
           else
-            echo "- **Build Status:** ⚠️ No IPA found" >> $GITHUB_STEP_SUMMARY
+            echo "- **Build Status:** ⚠️ Check logs" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -497,15 +304,12 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          echo "🧹 Cleaning up sensitive files and temporary data..."
-          
-          # Clean up any temporary API key files
-          rm -f /tmp/test_api_key.p8 2>/dev/null || true
-          rm -f /tmp/api_key.p8 2>/dev/null || true
+          echo "🧹 Cleaning up sensitive files..."
+          # ✅ ไม่ต้อง cleanup API key file แล้วเพราะไม่ได้สร้าง
+          # SSH keys are cleaned up automatically by ssh-agent action
           
           # Clean up any temporary build files
           rm -rf ios/build/temp 2>/dev/null || true
           rm -rf ios/fastlane/tmp 2>/dev/null || true
-          rm -rf ios/ipa_inspection 2>/dev/null || true
           
           echo "✅ Cleanup completed"
