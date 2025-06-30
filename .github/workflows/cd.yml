@@ -104,12 +104,10 @@ jobs:
         id: version
         run: |
           BRANCH="${{ steps.branch.outputs.branch }}"
-          # RUN_NUMBER="${{ github.run_number }}"  # ❌ ลบบรรทัดนี้
+          RUN_NUMBER="${{ github.run_number }}"
           
-          # Get base version from pubspec.yaml (ทั้ง version และ build number)
-          FULL_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2)
-          BASE_VERSION=$(echo $FULL_VERSION | cut -d'+' -f1)
-          BUILD_NUMBER=$(echo $FULL_VERSION | cut -d'+' -f2)
+          # Get base version from pubspec.yaml (ignore +build part)
+          BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
           
           # Override with manual version if provided
           if [ -n "${{ inputs.force_version }}" ]; then
@@ -117,37 +115,42 @@ jobs:
             echo "🔧 Using forced version: $BASE_VERSION"
           fi
           
-          # ใช้ version ตรงจาก pubspec.yaml
           VERSION="$BASE_VERSION"
-          VERSION_CODE="$BUILD_NUMBER"
           
-          # กำหนด environment ตาม branch (ไม่ใช้ version_code แยก)
+          # 🤖 FULL AUTO STRATEGY: Both platforms use auto-increment
           case "$BRANCH" in
             "main")
+              # Production: High range for both
+              VERSION_CODE=$((3000000 + RUN_NUMBER))
               ENVIRONMENT="production"
               IS_PRODUCTION="true"
               ;;
             "staging")
-              ENVIRONMENT="staging" 
+              # Staging: Mid range for both
+              VERSION_CODE=$((2000000 + RUN_NUMBER))
+              ENVIRONMENT="staging"
               IS_PRODUCTION="false"
               ;;
             *)
+              # Development: Low range for both
+              VERSION_CODE=$((1000000 + RUN_NUMBER))
               ENVIRONMENT="development"
               IS_PRODUCTION="false"
               ;;
           esac
           
+          # Same version code for both platforms
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
           echo "is_production=$IS_PRODUCTION" >> $GITHUB_OUTPUT
           
-          echo "📋 Version Info:"
-          echo "- Version: $VERSION"
-          echo "- Version Code: $VERSION_CODE (from pubspec.yaml)"
+          echo "📋 Full Auto Version Strategy:"
+          echo "- App Version: $VERSION"
+          echo "- Version Code: $VERSION_CODE (auto for both iOS & Android)"
           echo "- Environment: $ENVIRONMENT"
-          echo "- Is Production: $IS_PRODUCTION"
+          echo "- Run Number: $RUN_NUMBER"
 
       - name: Setup Summary
         run: |
