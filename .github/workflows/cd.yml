@@ -104,10 +104,12 @@ jobs:
         id: version
         run: |
           BRANCH="${{ steps.branch.outputs.branch }}"
-          RUN_NUMBER="${{ github.run_number }}"
+          # RUN_NUMBER="${{ github.run_number }}"  # ❌ ลบบรรทัดนี้
           
-          # Get base version from pubspec.yaml
-          BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          # Get base version from pubspec.yaml (ทั้ง version และ build number)
+          FULL_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2)
+          BASE_VERSION=$(echo $FULL_VERSION | cut -d'+' -f1)
+          BUILD_NUMBER=$(echo $FULL_VERSION | cut -d'+' -f2)
           
           # Override with manual version if provided
           if [ -n "${{ inputs.force_version }}" ]; then
@@ -115,23 +117,21 @@ jobs:
             echo "🔧 Using forced version: $BASE_VERSION"
           fi
           
-          # Generate version based on branch
+          # ใช้ version ตรงจาก pubspec.yaml
+          VERSION="$BASE_VERSION"
+          VERSION_CODE="$BUILD_NUMBER"
+          
+          # กำหนด environment ตาม branch (ไม่ใช้ version_code แยก)
           case "$BRANCH" in
             "main")
-              VERSION="$BASE_VERSION"
-              VERSION_CODE=$((3000000 + RUN_NUMBER))
               ENVIRONMENT="production"
               IS_PRODUCTION="true"
               ;;
             "staging")
-              VERSION="$BASE_VERSION-beta.$RUN_NUMBER"
-              VERSION_CODE=$((2000000 + RUN_NUMBER))
-              ENVIRONMENT="staging"
+              ENVIRONMENT="staging" 
               IS_PRODUCTION="false"
               ;;
             *)
-              VERSION="$BASE_VERSION-alpha.$RUN_NUMBER"
-              VERSION_CODE=$((1000000 + RUN_NUMBER))
               ENVIRONMENT="development"
               IS_PRODUCTION="false"
               ;;
@@ -145,7 +145,7 @@ jobs:
           
           echo "📋 Version Info:"
           echo "- Version: $VERSION"
-          echo "- Version Code: $VERSION_CODE"
+          echo "- Version Code: $VERSION_CODE (from pubspec.yaml)"
           echo "- Environment: $ENVIRONMENT"
           echo "- Is Production: $IS_PRODUCTION"
 
