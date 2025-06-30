@@ -10,10 +10,8 @@ platform :ios do
   desc "Deploy to App Store Connect"
   lane :deploy do |options|
     target = options[:target] || "testflight_internal"
-    # version = options[:version] || "1.0.0"
-    # build_number = options[:build_number] || "1"
-    version = "67000.0.0"
-    build_number = "1"
+    version = options[:version] || "1.0.0"
+    build_number = options[:build_number] || "1"
     
     UI.message("🍎 Building and deploying iOS")
     UI.message("🎯 Target: #{target}")
