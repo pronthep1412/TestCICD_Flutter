@@ -2,11 +2,14 @@
 default_platform(:ios)
 
 platform :ios do
+
+  #Setup และ Configuration
   before_all do
     ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
     setup_ci if ENV['CI']
   end
 
+  #Deploy ขึ้น store
   desc "Deploy to App Store Connect"
   lane :deploy do |options|
     target = options[:target] || "testflight_internal"
@@ -52,7 +55,7 @@ platform :ios do
     UI.success("✅ Successfully deployed to #{target}!")
   end
   
-  # 🔧 Helper method สำหรับสร้าง App Store Connect API key object
+  #สร้าง App Store Connect API key object
   private_lane :create_api_key_object do
     api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
     api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
@@ -97,7 +100,7 @@ platform :ios do
     end
   end
   
-  # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
+  #สำหรับ setup certificates พร้อม API key
   private_lane :setup_certificates_with_api_key do |options|
     readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
     cert_type = options[:type] || "appstore"
@@ -126,7 +129,7 @@ platform :ios do
     UI.success("✅ Certificates setup completed!")
   end
   
-  # 🔧 Private lanes for different deployment targets with API key support
+  #สำหรับ Deployment App Store
   private_lane :deploy_to_app_store do
     UI.message("🏪 Uploading to App Store...")
     
@@ -152,6 +155,7 @@ platform :ios do
     upload_to_app_store(upload_options)
   end
   
+  #สำหรับ Deployment TestFlight Beta
   private_lane :deploy_to_testflight_beta do
     UI.message("✈️ Uploading to TestFlight (Beta)...")
     
@@ -176,6 +180,7 @@ platform :ios do
     upload_to_testflight(upload_options)
   end
   
+  #สำหรับ Deployment TestFlight Internal
   private_lane :deploy_to_testflight_internal do
     UI.message("🔒 Uploading to TestFlight (Internal)...")
     
@@ -199,23 +204,25 @@ platform :ios do
     upload_to_testflight(upload_options)
   end
   
-  # Helper lanes for specific branches
-  desc "Deploy to App Store (main branch)"
+  #สำหรับ Deployment App Store
+  desc "Deploy to App Store (master branch)"
   lane :deploy_production do
     deploy(target: "app_store")
   end
   
-  desc "Deploy to TestFlight Beta (staging branch)"
+  #สำหรับ Deployment TestFlight Beta
+  desc "Deploy to TestFlight Beta (preprod branch)"
   lane :deploy_staging do
     deploy(target: "testflight_beta")
   end
   
-  desc "Deploy to TestFlight Internal (develop branch)"
+  #สำหรับ Deployment TestFlight Internal
+  desc "Deploy to TestFlight Internal (develop develop)"
   lane :deploy_development do
     deploy(target: "testflight_internal")
   end
   
-  # Debug/testing lanes
+  #สำหรับ Build แต่ไม่ deploy
   desc "Build only (no deploy)"
   lane :build_only do |options|
     # version = options[:version] || "1.0.0"
@@ -257,7 +264,7 @@ platform :ios do
     setup_certificates_with_api_key(readonly: readonly_mode, type: cert_type)
   end
   
-  # 🔧 Submit for review lane with API key support
+  #จัดการ certificates
   desc "Submit for App Store review"
   lane :submit_for_review do
     UI.message("📋 Submitting for App Store review...")
@@ -283,7 +290,7 @@ platform :ios do
     UI.success("✅ App submitted for review!")
   end
   
-  # 🔧 Submission information for App Store review
+  #information for App Store review
   private_lane :submission_info do
     {
       add_id_info_limits_tracking: true,
@@ -304,7 +311,7 @@ platform :ios do
     }
   end
   
-  # Error handling
+  #Error handling
   error do |lane, exception|
     UI.error("❌ Error in #{lane}: #{exception.message}")
     

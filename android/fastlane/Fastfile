@@ -2,11 +2,14 @@
 default_platform(:android)
 
 platform :android do
+
+  #Setup และ Configuration
   before_all do
     ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
     setup_ci if ENV['CI']
   end
 
+  #Deploy ขึ้น store
   desc "Deploy to Google Play Store"
   lane :deploy do |options|
     track = options[:track] || "internal"
@@ -53,30 +56,32 @@ platform :android do
     UI.success("✅ Successfully deployed to #{track} track!")
   end
   
-  # Helper lanes for specific branches
-  desc "Deploy to production (main branch)"
+  #สำหรับ Deployment Google play
+  desc "Deploy to production (master branch)"
   lane :deploy_production do
     deploy(track: "production")
   end
   
-  desc "Deploy to beta (staging branch)"
+  #สำหรับ Deployment Google play beta
+  desc "Deploy to beta (preprod branch)"
   lane :deploy_beta do
     deploy(track: "beta")
   end
   
+  #สำหรับ Deployment Google play internal
   desc "Deploy to internal (develop branch)"
   lane :deploy_internal do
     deploy(track: "internal")
   end
   
-  # Debug/testing lane
+  #สำหรับ Build แต่ไม่ deploy
   desc "Build only (no deploy)"
   lane :build_only do
     gradle(task: "clean assembleRelease")
     UI.success("✅ Android build completed!")
   end
   
-  # Error handling
+  #Error handling
   error do |lane, exception|
     UI.error("❌ Error in #{lane}: #{exception.message}")
     

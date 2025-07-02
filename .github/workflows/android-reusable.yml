@@ -179,8 +179,8 @@ jobs:
           
           # Determine track
           case "${{ inputs.branch }}" in
-            "main") TRACK="production" ;;
-            "staging") TRACK="beta" ;;
+            "master") TRACK="production" ;;
+            "preprod") TRACK="beta" ;;
             *) TRACK="internal" ;;
           esac
           

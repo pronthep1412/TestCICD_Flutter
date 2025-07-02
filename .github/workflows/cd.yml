@@ -126,13 +126,13 @@ jobs:
           
           # 🤖 FULL AUTO STRATEGY: Both platforms use auto-increment
           case "$BRANCH" in
-            "main")
+            "master")
               # Production: High range for both
               VERSION_CODE=$((OFFSET_START + RUN_NUMBER))
               ENVIRONMENT="production"
               IS_PRODUCTION="true"
               ;;
-            "staging")
+            "preprod")
               # Staging: Mid range for both
               VERSION_CODE=$((OFFSET_START + RUN_NUMBER))
               ENVIRONMENT="staging"

@@ -180,11 +180,11 @@ jobs:
           
           # Determine deployment target based on branch
           case "${{ inputs.branch }}" in
-            "main") 
+            "master") 
               TARGET="app_store"
               echo "🏪 Target: App Store"
               ;;
-            "staging") 
+            "preprod") 
               TARGET="testflight_beta"
               echo "✈️ Target: TestFlight Beta"
               ;;
@@ -264,8 +264,8 @@ jobs:
           
           # Show deployment target
           case "${{ inputs.branch }}" in
-            "main") echo "- **Target:** 🏪 App Store" >> $GITHUB_STEP_SUMMARY ;;
-            "staging") echo "- **Target:** ✈️ TestFlight Beta" >> $GITHUB_STEP_SUMMARY ;;
+            "master") echo "- **Target:** 🏪 App Store" >> $GITHUB_STEP_SUMMARY ;;
+            "preprod") echo "- **Target:** ✈️ TestFlight Beta" >> $GITHUB_STEP_SUMMARY ;;
             *) echo "- **Target:** 🔒 TestFlight Internal" >> $GITHUB_STEP_SUMMARY ;;
           esac
           
