@@ -56,20 +56,14 @@ env:
 jobs:
   build-and-deploy-ios:
     runs-on: macos-15
-    timeout-minutes: 35
     environment: ${{ inputs.environment }}
     
     steps:
+      #ดึงโค้ดใน git มาประมวลผล 
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: System Information
-        run: |
-          echo "🖥️ System Information:"
-          echo "- macOS: $(sw_vers -productVersion)"
-          echo "- Xcode: $(xcodebuild -version | head -1)"
-          echo "- Available space: $(df -h . | tail -1 | awk '{print $4}')"
-
+      #ติดตั้ง Flutter SDK ใน GitHub runner
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -77,6 +71,7 @@ jobs:
           channel: 'stable'
           cache: true
 
+      #เก็บ dependencies ที่ดาวน์โหลดแล้วไว้ใช้ซ้ำ
       - name: Cache Dependencies
         uses: actions/cache@v4
         with:
@@ -90,12 +85,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-flutter-ios-
 
+      #ติดตั้ง packages ที่ต้องใช้ในโปรเจกต์
       - name: Get Dependencies
         run: |
           echo "📦 Installing Flutter dependencies..."
           flutter pub get
           echo "✅ Flutter dependencies installed"
 
+      #อัพเดทเลขเวอร์ชันของแอป
       - name: Update Version
         run: |
           echo "📝 Updating version to: ${{ inputs.version }}+${{ inputs.version_code }}"
@@ -103,28 +100,13 @@ jobs:
           grep "^version:" pubspec.yaml
           echo "✅ Version updated in pubspec.yaml"
 
-      # 🔑 SETUP SSH FOR FASTLANE MATCH
+      #ตั้งค่า SSH authentication เพื่อเข้าถึง Match repository
       - name: Setup SSH for Match
         uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.MATCH_PRIVATE_KEY }}
 
-      # 🔍 DEBUG SSH CONNECTION
-      - name: Test SSH Connection to Match Repository
-        run: |
-          echo "🔍 Testing SSH connection to Match repository..."
-          
-          # Test SSH connection to GitHub
-          ssh -T git@github.com || true
-          
-          # Test specific repository access
-          echo "Testing access to: ${{ secrets.MATCH_GIT_URL }}"
-          git ls-remote "${{ secrets.MATCH_GIT_URL }}" || true
-          
-          # Show SSH key fingerprint
-          ssh-add -l || true
-
-      # ✅ ไม่ต้องสร้าง API key file แล้ว - ใช้ content โดยตรง
+      #log เอาไว้ตรวจสอบ API keys
       - name: Verify App Store Connect API Configuration
         run: |
           echo "🔑 Verifying App Store Connect API configuration..."
@@ -155,7 +137,7 @@ jobs:
             echo "❌ API Key Content: Missing"
           fi
 
-      # 📱 INSTALL COCOAPODS DEPENDENCIES
+      #ติดตั้ง CocoaPods
       - name: Install CocoaPods Dependencies
         run: |
           echo "📱 Installing CocoaPods dependencies..."
@@ -176,7 +158,7 @@ jobs:
           
           echo "✅ CocoaPods installation completed"
 
-      # 🔧 Enhanced Ruby setup for Fastlane
+      #เตรียม Ruby environment เพื่อใช้งาน Fastlane
       - name: Setup Ruby for Fastlane
         uses: ruby/setup-ruby@v1
         with:
@@ -184,7 +166,7 @@ jobs:
           bundler-cache: true
           working-directory: ios
 
-      # 🔨 BUILD & DEPLOY WITH FASTLANE
+      #สร้างไฟล์ IPA และส่งขึ้น App Store Connect
       - name: Build and Deploy iOS
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
@@ -232,7 +214,7 @@ jobs:
           
           echo "✅ iOS deployment completed!"
 
-      # 📊 VERIFY BUILD ARTIFACTS
+      #ตรวจสอบว่า build สำเร็จจริงๆ และมีไฟล์ที่ต้องการ
       - name: Verify Build Artifacts
         run: |
           echo "🔍 Verifying build artifacts..."
@@ -257,7 +239,8 @@ jobs:
             echo "📦 Build directory contents:"
             ls -la ios/build/
           fi
-
+      
+      #เก็บไฟล์ build results ไว้ใน GitHub สำหรับ download หรือ debug
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -268,6 +251,7 @@ jobs:
             ios/*.ipa
           retention-days: 30
 
+      #สรุปผลการ build 
       - name: Build Summary
         run: |
           echo "## 🍎 iOS Build Summary" >> $GITHUB_STEP_SUMMARY
@@ -301,6 +285,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*Build completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 
+      #ลบไฟล์ที่มีข้อมูลลับ หลังจาก build/deploy เสร็จสิ้น
       - name: Cleanup
         if: always()
         run: |
