@@ -3,13 +3,15 @@ name: Flutter Continuous Deployment
 
 on:
   push:
-    branches: [main, staging, develop]
+    branches:
+      - master
+      - develop
+      - preprod
     paths:
       - 'lib/**'
       - 'android/**'
       - 'ios/**'
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
+      - 'pubspec.*'
   
   workflow_dispatch:
     inputs:
@@ -19,9 +21,9 @@ on:
         default: 'develop'
         type: choice
         options:
+          - master
           - develop
-          - staging
-          - main
+          - preprod
       force_version:
         description: 'Force specific version (optional)'
         required: false
@@ -30,7 +32,7 @@ env:
   FLUTTER_VERSION: '3.32.2'
 
 jobs:
-  # 📋 SETUP & VERSION MANAGEMENT
+
   setup:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -44,11 +46,13 @@ jobs:
       deploy_ios: ${{ steps.changes.outputs.deploy_ios }}
       
     steps:
+      #ดึงโค้ดใน git มาประมวลผล 
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      #ตรวจสอบว่าการทำงานของ workflow นี้ถูกเรียกใช้จาก branch ไหน
       - name: Determine Branch
         id: branch
         run: |
@@ -60,6 +64,7 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "🌟 Target branch: $BRANCH"
 
+      #วิเคราะห์ว่ามีการเปลี่ยนแปลงเกิดขึ้นกับโค้ดส่วนไหนบ้าง
       - name: Analyze Changes
         id: changes
         run: |
@@ -100,12 +105,14 @@ jobs:
           echo "📱 Deploy Android: $ANDROID_CHANGED"
           echo "🍎 Deploy iOS: $IOS_CHANGED"
 
+      #สร้าง version number อัพ store
       - name: Generate Version
         id: version
         run: |
           BRANCH="${{ steps.branch.outputs.branch }}"
           RUN_NUMBER="${{ github.run_number }}"
-          
+          OFFSET_START=1000200 
+
           # Get base version from pubspec.yaml (ignore +build part)
           BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
           
@@ -121,19 +128,19 @@ jobs:
           case "$BRANCH" in
             "main")
               # Production: High range for both
-              VERSION_CODE=$((3000000 + RUN_NUMBER))
+              VERSION_CODE=$((OFFSET_START + RUN_NUMBER))
               ENVIRONMENT="production"
               IS_PRODUCTION="true"
               ;;
             "staging")
               # Staging: Mid range for both
-              VERSION_CODE=$((2000000 + RUN_NUMBER))
+              VERSION_CODE=$((OFFSET_START + RUN_NUMBER))
               ENVIRONMENT="staging"
               IS_PRODUCTION="false"
               ;;
             *)
               # Development: Low range for both
-              VERSION_CODE=$((1000000 + RUN_NUMBER))
+              VERSION_CODE=$((OFFSET_START + RUN_NUMBER))
               ENVIRONMENT="development"
               IS_PRODUCTION="false"
               ;;
@@ -152,6 +159,7 @@ jobs:
           echo "- Environment: $ENVIRONMENT"
           echo "- Run Number: $RUN_NUMBER"
 
+      #สรุปผล
       - name: Setup Summary
         run: |
           echo "## 🚀 Flutter CD Pipeline" >> $GITHUB_STEP_SUMMARY
@@ -161,7 +169,7 @@ jobs:
           echo "- **Android Deploy:** ${{ steps.changes.outputs.deploy_android }}" >> $GITHUB_STEP_SUMMARY
           echo "- **iOS Deploy:** ${{ steps.changes.outputs.deploy_ios }}" >> $GITHUB_STEP_SUMMARY
 
-  # ⏸️ PRODUCTION APPROVAL (Manual gate for production)
+  #อนุมัติการอัพขึ้น store และสร้าง version
   production-approval:
     needs: setup
     if: needs.setup.outputs.is_production == 'true'
@@ -177,7 +185,7 @@ jobs:
           echo "- Branch: ${{ needs.setup.outputs.branch }}"
           echo "✅ Approved for production deployment"
 
-  # 🤖 ANDROID DEPLOYMENT
+  # Build deploy for Android
   deploy-android:
     needs: [setup, production-approval]
     if: |
@@ -192,7 +200,7 @@ jobs:
       environment: ${{ needs.setup.outputs.environment }}
     secrets: inherit
 
-  # 🍎 iOS DEPLOYMENT
+  # Build deploy for IOS
   deploy-ios:
     needs: [setup, production-approval]
     if: |
@@ -207,7 +215,7 @@ jobs:
       environment: ${{ needs.setup.outputs.environment }}
     secrets: inherit
 
-  # 📦 CREATE GITHUB RELEASE (Production only)
+  #สร้าง GitHub Release
   create-release:
     needs: [setup, deploy-android, deploy-ios]
     if: |
@@ -260,7 +268,7 @@ jobs:
           draft: false
           prerelease: false
 
-  # 📊 DEPLOYMENT SUMMARY
+  #สรุปการ deploy
   deployment-summary:
     needs: [setup, deploy-android, deploy-ios, create-release]
     if: always()

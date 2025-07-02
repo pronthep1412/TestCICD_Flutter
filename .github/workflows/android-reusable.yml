@@ -54,13 +54,14 @@ env:
 jobs:
   build-and-deploy-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     environment: ${{ inputs.environment }}
     
     steps:
+      #ดึงโค้ดใน git มาประมวลผล 
       - name: Checkout
         uses: actions/checkout@v4
 
+      #ติดตั้ง Flutter SDK ใน GitHub runner
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -68,12 +69,14 @@ jobs:
           channel: 'stable'
           cache: true
 
+      #ติดตั้ง java
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
+      #เก็บ dependencies ที่ดาวน์โหลดแล้วไว้ใช้ซ้ำ
       - name: Cache Dependencies
         uses: actions/cache@v4
         with:
@@ -85,18 +88,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-flutter-
 
+      #ติดตั้ง packages ที่ต้องใช้ในโปรเจกต์
       - name: Get Dependencies
         run: |
           echo "📦 Installing dependencies..."
           flutter pub get
 
+      #อัพเดทเลขเวอร์ชันของแอป
       - name: Update Version
         run: |
           echo "📝 Updating version to: ${{ inputs.version }}+${{ inputs.version_code }}"
           sed -i "s/^version: .*/version: ${{ inputs.version }}+${{ inputs.version_code }}/" pubspec.yaml
           grep "^version:" pubspec.yaml
 
-      # 🔑 SIMPLIFIED KEYSTORE SETUP
+      #ตั้งค่่า Keystore
       - name: Setup Android Keystore
         run: |
           echo "🔑 Setting up Android keystore..."
@@ -121,7 +126,7 @@ jobs:
           echo "✅ Keystore setup completed"
           ls -la android/app/key.jks
 
-      # 🔨 SIMPLIFIED BUILD
+      #สร้างไฟล์ aab
       - name: Build Android AAB
         run: |
           echo "🔨 Building Android App Bundle..."
@@ -139,6 +144,7 @@ jobs:
             exit 1
           fi
 
+      #เตรียม Ruby environment เพื่อใช้งาน Fastlane
       - name: Setup Ruby and Bundler
         uses: ruby/setup-ruby@v1
         with:
@@ -146,7 +152,7 @@ jobs:
           bundler-cache: true
           working-directory: android
 
-      # 🚀 DEPLOY WITH EXISTING FASTLANE
+      #อัพไฟล์ขึ้น Google Play
       - name: Deploy to Google Play
         run: |
           echo "🚀 Deploying to Google Play..."
@@ -190,6 +196,7 @@ jobs:
             exit 1
           fi
 
+      #เก็บไฟล์ build results ไว้ใน GitHub สำหรับ download หรือ debug
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -199,6 +206,7 @@ jobs:
             android/fastlane/logs/
           retention-days: 30
 
+      #สรุปผลการ build 
       - name: Build Summary
         run: |
           echo "## 🤖 Android Build Summary" >> $GITHUB_STEP_SUMMARY
@@ -214,6 +222,7 @@ jobs:
           
           echo "- **Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
 
+      #ลบไฟล์ที่มีข้อมูลลับ หลังจาก build/deploy เสร็จสิ้น
       - name: Cleanup
         if: always()
         run: |
