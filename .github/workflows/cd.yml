@@ -192,7 +192,7 @@ jobs:
       always() && 
       needs.setup.outputs.deploy_android == 'true' && 
       (needs.setup.outputs.is_production != 'true' || needs.production-approval.result == 'success')
-    uses: ./.github/workflows/android-reusable.yml
+    uses: ./.github/workflows/android-build.yml
     with:
       version: ${{ needs.setup.outputs.version }}
       version_code: ${{ needs.setup.outputs.version_code }}
@@ -207,7 +207,7 @@ jobs:
       always() && 
       needs.setup.outputs.deploy_ios == 'true' && 
       (needs.setup.outputs.is_production != 'true' || needs.production-approval.result == 'success')
-    uses: ./.github/workflows/ios-reusable.yml
+    uses: ./.github/workflows/ios-build.yml
     with:
       version: ${{ needs.setup.outputs.version }}
       version_code: ${{ needs.setup.outputs.version_code }}

@@ -178,18 +178,21 @@ jobs:
         run: |
           echo "🍎 Building and deploying iOS..."
           
-          # Determine deployment target based on branch
+          # Determine deployment target and lane based on branch
           case "${{ inputs.branch }}" in
             "master") 
               TARGET="app_store"
+              LANE="deploy_master"
               echo "🏪 Target: App Store"
               ;;
             "preprod") 
               TARGET="testflight_beta"
+              LANE="deploy_preprod"
               echo "✈️ Target: TestFlight Beta"
               ;;
             *) 
               TARGET="testflight_internal"
+              LANE="deploy_develop"
               echo "🔒 Target: TestFlight Internal"
               ;;
           esac
@@ -197,20 +200,18 @@ jobs:
           # Pre-build validation
           echo "📋 Build configuration:"
           echo "- Target: $TARGET"
+          echo "- Lane: $LANE"
           echo "- Version: ${{ inputs.version }}"
           echo "- Build: ${{ inputs.version_code }}"
           echo "- Branch: ${{ inputs.branch }}"
           echo "- API Key ID: ${APP_STORE_CONNECT_API_KEY_ID:0:8}..."
           echo "- API Key Content: $([ -n "$APP_STORE_CONNECT_API_KEY_CONTENT" ] && echo "Available" || echo "Missing")"
           
-          # Deploy with Fastlane
+          # Deploy with Fastlane using standardized lane names
           cd ios
           
           echo "🚀 Starting deployment..."
-          bundle exec fastlane deploy \
-            target:$TARGET \
-            version:"${{ inputs.version }}" \
-            build_number:"${{ inputs.version_code }}"
+          bundle exec fastlane $LANE
           
           echo "✅ iOS deployment completed!"
 

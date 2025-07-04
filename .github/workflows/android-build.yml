@@ -177,19 +177,29 @@ jobs:
           # Setup Google Play credentials
           echo "${{ secrets.GOOGLE_PLAY_JSON_KEY }}" | base64 -d > android/google-play-key.json
           
-          # Determine track
+          # Determine track and deployment lane
           case "${{ inputs.branch }}" in
-            "master") TRACK="production" ;;
-            "preprod") TRACK="beta" ;;
-            *) TRACK="internal" ;;
+            "master") 
+              TRACK="production"
+              LANE="deploy_master"
+              ;;
+            "preprod") 
+              TRACK="alpha"
+              LANE="deploy_preprod"
+              ;;
+            *) 
+              TRACK="internal"
+              LANE="deploy_develop"
+              ;;
           esac
           
           echo "📤 Deploying to track: $TRACK"
+          echo "🎯 Using lane: $LANE"
           
           # Deploy with Fastlane (only if AAB exists)
           if [ -f "build/app/outputs/bundle/release/app-release.aab" ]; then
             cd android
-            bundle exec fastlane deploy track:$TRACK
+            bundle exec fastlane $LANE
             echo "✅ Deployment completed!"
           else
             echo "❌ Cannot deploy: AAB file missing"
