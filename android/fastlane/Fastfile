@@ -70,12 +70,11 @@ platform :android do
     version_name = ENV['VERSION_NAME'] || "1.0.0"
     version_code = ENV['VERSION_CODE'] || "1"
     
-    UI.message("🔨 Building Flutter Android Bundle...")
+    UI.message("� Using version from environment:")
+    UI.message("   VERSION_NAME: #{version_name}")
+    UI.message("   VERSION_CODE: #{version_code}")
     
-    # Build Flutter Android Bundle
-    sh("cd ../.. && flutter build appbundle --release --build-name=#{version_name} --build-number=#{version_code}")
-    
-    # 🔍 Look for AAB file in Flutter build output
+    # 🔍 Look for existing AAB file (should be already built by workflow)
     possible_paths = [
       "../../build/app/outputs/bundle/release/app-release.aab",
       "../build/app/outputs/bundle/release/app-release.aab",
@@ -89,6 +88,22 @@ platform :android do
         aab_path = abs_path
         UI.message("✅ Found AAB at: #{aab_path}")
         break
+      end
+    end
+    
+    # If no AAB found, build it
+    unless aab_path
+      UI.message("🔨 No existing AAB found, building Flutter Android Bundle...")
+      sh("cd ../.. && flutter build appbundle --release --build-name=#{version_name} --build-number=#{version_code}")
+      
+      # Check again for AAB
+      possible_paths.each do |path|
+        abs_path = File.expand_path(path)
+        if File.exist?(abs_path)
+          aab_path = abs_path
+          UI.message("✅ Built AAB at: #{aab_path}")
+          break
+        end
       end
     end
     
