@@ -20,8 +20,15 @@ platform :ios do
     UI.message("   CFBundleVersion: #{version_code}")
     UI.message("   Source: GitHub Actions (#{ENV['GITHUB_REF_NAME']})")
     
-    increment_version_number(version_number: version_name)
-    increment_build_number(build_number: version_code)
+    increment_version_number(
+      version_number: version_name,
+      xcodeproj: "Runner.xcodeproj"
+    )
+    
+    increment_build_number(
+      build_number: version_code,
+      xcodeproj: "Runner.xcodeproj"
+    )
     
     UI.success("✅ Version applied from GitHub Actions")
   end

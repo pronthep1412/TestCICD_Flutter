@@ -175,8 +175,17 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
           FL_UPDATE_PLIST_PATH: Runner/Info.plist
+          VERSION_NAME: ${{ inputs.version }}
+          VERSION_CODE: ${{ inputs.version_code }}
         run: |
           echo "🍎 Building and deploying iOS..."
+          
+          # Show version information for debugging
+          echo "📋 Version Information:"
+          echo "- VERSION_NAME: $VERSION_NAME"
+          echo "- VERSION_CODE: $VERSION_CODE"
+          echo "- Input Version: ${{ inputs.version }}"
+          echo "- Input Version Code: ${{ inputs.version_code }}"
           
           # Determine deployment target and lane based on branch
           case "${{ inputs.branch }}" in
