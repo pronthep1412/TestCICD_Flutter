@@ -154,8 +154,18 @@ jobs:
 
       #อัพไฟล์ขึ้น Google Play
       - name: Deploy to Google Play
+        env:
+          VERSION_NAME: ${{ inputs.version }}
+          VERSION_CODE: ${{ inputs.version_code }}
         run: |
           echo "🚀 Deploying to Google Play..."
+          
+          # Show version information for debugging
+          echo "📋 Version Information:"
+          echo "- VERSION_NAME: $VERSION_NAME"
+          echo "- VERSION_CODE: $VERSION_CODE"
+          echo "- Input Version: ${{ inputs.version }}"
+          echo "- Input Version Code: ${{ inputs.version_code }}"
           
           # 🔍 DEBUG: ตรวจสอบ AAB file
           echo "🔍 Searching for AAB files..."
