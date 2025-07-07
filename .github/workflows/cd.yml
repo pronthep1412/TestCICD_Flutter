@@ -4,35 +4,34 @@ name: Flutter Continuous Deployment
 on:
   push:
     branches:
-      - master
+      # - master
       - develop
       - preprod
     paths:
-      - 'lib/**'
-      - 'android/**'
-      - 'ios/**'
-      - 'pubspec.*'
-  
+      - "lib/**"
+      - "android/**"
+      - "ios/**"
+      - "pubspec.*"
+
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to deploy'
+        description: "Branch to deploy"
         required: true
-        default: 'develop'
+        default: "develop"
         type: choice
         options:
           - master
           - develop
           - preprod
       force_version:
-        description: 'Force specific version (optional)'
+        description: "Force specific version (optional)"
         required: false
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: "3.32.2"
 
 jobs:
-
   setup:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -44,9 +43,9 @@ jobs:
       is_production: ${{ steps.version.outputs.is_production }}
       deploy_android: ${{ steps.changes.outputs.deploy_android }}
       deploy_ios: ${{ steps.changes.outputs.deploy_ios }}
-      
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล 
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -69,7 +68,7 @@ jobs:
         id: changes
         run: |
           echo "🔍 Analyzing changes..."
-          
+
           # For manual dispatch, deploy both
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "deploy_android=true" >> $GITHUB_OUTPUT
@@ -77,31 +76,31 @@ jobs:
             echo "📱 Manual deploy: Android + iOS"
             exit 0
           fi
-          
+
           # Check changed files
           git diff --name-only HEAD~1 HEAD > changed_files.txt
-          
+
           # Check if Android/iOS specific changes
           ANDROID_CHANGED="false"
           IOS_CHANGED="false"
-          
+
           if grep -E "(android/|\.gradle|build\.gradle)" changed_files.txt > /dev/null; then
             ANDROID_CHANGED="true"
           fi
-          
+
           if grep -E "(ios/|\.podspec|Podfile)" changed_files.txt > /dev/null; then
             IOS_CHANGED="true"
           fi
-          
+
           # If core changes, deploy both
           if grep -E "(lib/|pubspec\.(yaml|lock))" changed_files.txt > /dev/null; then
             ANDROID_CHANGED="true"
             IOS_CHANGED="true"
           fi
-          
+
           echo "deploy_android=$ANDROID_CHANGED" >> $GITHUB_OUTPUT
           echo "deploy_ios=$IOS_CHANGED" >> $GITHUB_OUTPUT
-          
+
           echo "📱 Deploy Android: $ANDROID_CHANGED"
           echo "🍎 Deploy iOS: $IOS_CHANGED"
 
@@ -111,19 +110,19 @@ jobs:
         run: |
           BRANCH="${{ steps.branch.outputs.branch }}"
           RUN_NUMBER="${{ github.run_number }}"
-          OFFSET_START=1000200 
+          OFFSET_START=1000400 
 
           # Get base version from pubspec.yaml (ignore +build part)
           BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
-          
+
           # Override with manual version if provided
           if [ -n "${{ inputs.force_version }}" ]; then
             BASE_VERSION="${{ inputs.force_version }}"
             echo "🔧 Using forced version: $BASE_VERSION"
           fi
-          
+
           VERSION="$BASE_VERSION"
-          
+
           # 🤖 FULL AUTO STRATEGY: Both platforms use auto-increment
           case "$BRANCH" in
             "master")
@@ -145,14 +144,14 @@ jobs:
               IS_PRODUCTION="false"
               ;;
           esac
-          
+
           # Same version code for both platforms
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "version_code=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
           echo "is_production=$IS_PRODUCTION" >> $GITHUB_OUTPUT
-          
+
           echo "📋 Full Auto Version Strategy:"
           echo "- App Version: $VERSION"
           echo "- Version Code: $VERSION_CODE (auto for both iOS & Android)"
@@ -174,7 +173,7 @@ jobs:
     needs: setup
     if: needs.setup.outputs.is_production == 'true'
     runs-on: ubuntu-latest
-    environment: 
+    environment:
       name: production-approval
       url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
@@ -225,7 +224,7 @@ jobs:
       (needs.deploy-ios.result == 'success' || needs.deploy-ios.result == 'skipped')
     runs-on: ubuntu-latest
     environment: production
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -234,26 +233,26 @@ jobs:
         id: release_notes
         run: |
           VERSION="${{ needs.setup.outputs.version }}"
-          
+
           # Generate changelog from commits
           echo "## 🚀 Release v$VERSION" > release_notes.md
           echo "" >> release_notes.md
           echo "### 📱 Platform Availability" >> release_notes.md
-          
+
           if [ "${{ needs.deploy-android.result }}" = "success" ]; then
             echo "- **Android**: ✅ Google Play Store" >> release_notes.md
           fi
-          
+
           if [ "${{ needs.deploy-ios.result }}" = "success" ]; then
             echo "- **iOS**: ✅ App Store" >> release_notes.md
           fi
-          
+
           echo "" >> release_notes.md
           echo "### 📝 Changes" >> release_notes.md
-          
+
           # Get recent commits
           git log --oneline --no-merges -10 --pretty="- %s" >> release_notes.md
-          
+
           echo "" >> release_notes.md
           echo "*Released on $(date)*" >> release_notes.md
 
@@ -263,7 +262,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ needs.setup.outputs.version }}
-          release_name: 'Flutter v${{ needs.setup.outputs.version }}'
+          release_name: "Flutter v${{ needs.setup.outputs.version }}"
           body_path: release_notes.md
           draft: false
           prerelease: false
@@ -273,7 +272,7 @@ jobs:
     needs: [setup, deploy-android, deploy-ios, create-release]
     if: always()
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Generate Summary
         run: |
@@ -284,9 +283,9 @@ jobs:
           echo "- **Branch:** ${{ needs.setup.outputs.branch }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${{ needs.setup.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "### 📱 Platform Results" >> $GITHUB_STEP_SUMMARY
-          
+
           # Android status
           ANDROID_STATUS="${{ needs.deploy-android.result }}"
           case "$ANDROID_STATUS" in
@@ -295,7 +294,7 @@ jobs:
             "failure") echo "- **Android:** ❌ Deployment failed" >> $GITHUB_STEP_SUMMARY ;;
             *) echo "- **Android:** ⏸️ Not triggered" >> $GITHUB_STEP_SUMMARY ;;
           esac
-          
+
           # iOS status  
           IOS_STATUS="${{ needs.deploy-ios.result }}"
           case "$IOS_STATUS" in
@@ -304,7 +303,7 @@ jobs:
             "failure") echo "- **iOS:** ❌ Deployment failed" >> $GITHUB_STEP_SUMMARY ;;
             *) echo "- **iOS:** ⏸️ Not triggered" >> $GITHUB_STEP_SUMMARY ;;
           esac
-          
+
           # Release status
           if [ "${{ needs.setup.outputs.is_production }}" = "true" ]; then
             RELEASE_STATUS="${{ needs.create-release.result }}"
@@ -313,7 +312,7 @@ jobs:
               *) echo "- **GitHub Release:** ❌ Failed" >> $GITHUB_STEP_SUMMARY ;;
             esac
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*Deployment completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 
@@ -321,7 +320,7 @@ jobs:
         run: |
           ANDROID_OK="${{ needs.deploy-android.result }}"
           IOS_OK="${{ needs.deploy-ios.result }}"
-          
+
           # Check if any required deployment failed
           if [ "$ANDROID_OK" = "failure" ] || [ "$IOS_OK" = "failure" ]; then
             echo "❌ Some deployments failed"

@@ -4,28 +4,27 @@ name: Flutter CI - Pull Request Testing
 on:
   pull_request:
     branches:
-      - master
+      # - master
       - develop
       - preprod
     paths:
-      - 'lib/**'
-      - 'android/**'
-      - 'ios/**'
-      - 'pubspec.*'
+      - "lib/**"
+      - "android/**"
+      - "ios/**"
+      - "pubspec.*"
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: "3.32.2"
 
 jobs:
-
   test-and-validate:
     runs-on: ubuntu-latest
     outputs:
       pr_version: ${{ steps.version.outputs.version }}
       has_tests: ${{ steps.changes.outputs.has_tests }}
-      
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล 
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -45,7 +44,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
+          channel: "stable"
           cache: true
 
       #เก็บ dependencies ที่ดาวน์โหลดแล้วไว้ใช้ซ้ำ
@@ -71,7 +70,7 @@ jobs:
         run: |
           echo "🔒 Running dependency security audit..."
           echo "## 🔒 Security Audit" >> $GITHUB_STEP_SUMMARY
-          
+
           # Check for pub audit command (if available)
           if flutter pub audit --help > /dev/null 2>&1; then
             echo "Running flutter pub audit..."
@@ -96,7 +95,7 @@ jobs:
         run: |
           echo "🔍 Running code analysis..."
           echo "## 🔍 Code Analysis" >> $GITHUB_STEP_SUMMARY
-          
+
           if flutter analyze --no-congratulate > analysis-results.txt 2>&1; then
             echo "✅ Code analysis passed" >> $GITHUB_STEP_SUMMARY
           else
@@ -113,7 +112,7 @@ jobs:
         run: |
           echo "📝 Checking code formatting..."
           echo "## 📝 Code Formatting" >> $GITHUB_STEP_SUMMARY
-          
+
           if dart format --set-exit-if-changed . > format-results.txt 2>&1; then
             echo "✅ All files properly formatted" >> $GITHUB_STEP_SUMMARY
           else
@@ -133,7 +132,7 @@ jobs:
         run: |
           echo "🧪 Running tests with coverage..."
           echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
-          
+
           if flutter test --coverage --reporter=expanded > test-results.txt 2>&1; then
             # Count tests
             TEST_COUNT=$(grep -o "All [0-9]* tests passed" test-results.txt | grep -o "[0-9]*" || echo "unknown")
@@ -152,20 +151,20 @@ jobs:
         if: needs.test-and-validate.outputs.has_tests == 'true'
         run: |
           COVERAGE="0"
-          
+
           if [ -f "coverage/lcov.info" ]; then
             # Install lcov for coverage calculation
             sudo apt-get update && sudo apt-get install -y lcov >/dev/null 2>&1
             COVERAGE=$(lcov --summary coverage/lcov.info 2>/dev/null | \
                       grep 'lines' | grep -o '[0-9.]*%' | head -1 | sed 's/%//' || echo "0")
           fi
-          
+
           echo "percentage=${COVERAGE:-0}" >> $GITHUB_OUTPUT
-          
+
           # Coverage report
           echo "## 📊 Test Coverage" >> $GITHUB_STEP_SUMMARY
           echo "- **Coverage:** ${COVERAGE:-0}%" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "$(awk "BEGIN {print (${COVERAGE:-0} >= 80) ? 1 : 0}")" = "1" ]; then
             echo "- **Status:** ✅ Excellent (≥80%)" >> $GITHUB_STEP_SUMMARY
           elif [ "$(awk "BEGIN {print (${COVERAGE:-0} >= 70) ? 1 : 0}")" = "1" ]; then
@@ -201,13 +200,13 @@ jobs:
     needs: [test-and-validate]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล   
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
 
-      #ติดตั้ง Flutter SDK ใน GitHub runner  
+      #ติดตั้ง Flutter SDK ใน GitHub runner
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -218,8 +217,8 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: "temurin"
+          java-version: "17"
 
       #ติดตั้ง packages ที่ต้องใช้ในโปรเจกต์
       - name: Get Dependencies
@@ -232,7 +231,7 @@ jobs:
           flutter build apk --debug \
             --build-name="${{ needs.test-and-validate.outputs.pr_version }}" \
             --build-number=99
-          
+
           if [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
             size=$(ls -lh build/app/outputs/flutter-apk/app-debug.apk | awk '{print $5}')
             echo "✅ Debug APK: $size"
@@ -247,13 +246,13 @@ jobs:
     needs: [test-and-validate]
     runs-on: macos-latest
     timeout-minutes: 20
-    
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล   
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
 
-      #ติดตั้ง Flutter SDK ใน GitHub runner  
+      #ติดตั้ง Flutter SDK ใน GitHub runner
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -277,7 +276,7 @@ jobs:
           flutter build ios --debug --no-codesign \
             --build-name="${{ needs.test-and-validate.outputs.pr_version }}" \
             --build-number=99
-          
+
           if [ -d "build/ios/iphoneos/Runner.app" ]; then
             size=$(du -sh build/ios/iphoneos/Runner.app | cut -f1)
             echo "✅ Debug iOS App: $size"
@@ -292,7 +291,7 @@ jobs:
     needs: [test-and-validate, build-android-test, build-ios-test]
     if: always()
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Generate PR Summary
         run: |
@@ -304,9 +303,9 @@ jobs:
           echo "- **Base:** ${{ github.event.pull_request.base.ref }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Head:** ${{ github.event.pull_request.head.ref }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "### ✅ Validation Results" >> $GITHUB_STEP_SUMMARY
-          
+
           # Code Quality
           QUALITY_STATUS="${{ needs.test-and-validate.result }}"
           if [ "$QUALITY_STATUS" = "success" ]; then
@@ -314,7 +313,7 @@ jobs:
           else
             echo "- **Code Quality:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           # Test Coverage
           if [ "${{ needs.test-and-validate.outputs.has_tests }}" = "true" ]; then
             COVERAGE="${{ needs.test-and-validate.outputs.coverage }}"
@@ -322,22 +321,22 @@ jobs:
           else
             echo "- **Test Coverage:** ⚠️ No tests" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           # Android Build
           ANDROID_STATUS="${{ needs.build-android-test.result }}"
           echo "- **Android Build:** $( [ "$ANDROID_STATUS" = "success" ] && echo "✅ Passed" || echo "❌ Failed" )" >> $GITHUB_STEP_SUMMARY
-          
+
           # iOS Build  
           IOS_STATUS="${{ needs.build-ios-test.result }}"
           echo "- **iOS Build:** $( [ "$IOS_STATUS" = "success" ] && echo "✅ Passed" || echo "❌ Failed" )" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           # Final Status
           QUALITY_OK="${{ needs.test-and-validate.result == 'success' }}"
           ANDROID_OK="${{ needs.build-android-test.result == 'success' || needs.build-android-test.result == 'skipped' }}"
           IOS_OK="${{ needs.build-ios-test.result == 'success' || needs.build-ios-test.result == 'skipped' }}"
-          
+
           if [ "$QUALITY_OK" = "true" ] && [ "$ANDROID_OK" = "true" ] && [ "$IOS_OK" = "true" ]; then
             echo "### ✅ Ready for Review" >> $GITHUB_STEP_SUMMARY
             echo "All validation checks passed! This PR is ready for review." >> $GITHUB_STEP_SUMMARY
@@ -345,7 +344,7 @@ jobs:
             echo "### ❌ Issues Found" >> $GITHUB_STEP_SUMMARY
             echo "Some validation checks failed. Please fix the issues before requesting review." >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*Validation completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 
@@ -354,7 +353,7 @@ jobs:
           QUALITY_OK="${{ needs.test-and-validate.result == 'success' }}"
           ANDROID_OK="${{ needs.build-android-test.result == 'success' || needs.build-android-test.result == 'skipped' }}"
           IOS_OK="${{ needs.build-ios-test.result == 'success' || needs.build-ios-test.result == 'skipped' }}"
-          
+
           if [ "$QUALITY_OK" = "true" ] && [ "$ANDROID_OK" = "true" ] && [ "$IOS_OK" = "true" ]; then
             echo "✅ All PR validation checks passed!"
             exit 0
