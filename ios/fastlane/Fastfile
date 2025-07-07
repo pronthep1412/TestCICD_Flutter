@@ -1,30 +1,112 @@
-# ios/fastlane/Fastfile - Updated with API key object support for ALL actions
+# ios/fastlane/Fastfile - Standardized for all platforms
 default_platform(:ios)
 
 platform :ios do
+
+  #Setup และ Configuration
   before_all do
     ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
     setup_ci if ENV['CI']
+    apply_version_from_env if ENV['CI']
   end
 
-  desc "Deploy to App Store Connect"
-  lane :deploy do |options|
-    target = options[:target] || "testflight_internal"
-    version = options[:version] || "1.0.0"
-    build_number = options[:build_number] || "1"
+  #Version Management
+  private_lane :apply_version_from_env do
+    version_name = ENV['VERSION_NAME'] || "1.0.0"
+    version_code = ENV['VERSION_CODE'] || "1"
     
-    UI.message("🍎 Building and deploying iOS")
-    UI.message("🎯 Target: #{target}")
-    UI.message("📋 Version: #{version} (#{build_number})")
+    UI.message("📋 Applying version from GitHub Actions workflow:")
+    UI.message("   CFBundleShortVersionString: #{version_name}")
+    UI.message("   CFBundleVersion: #{version_code}")
+    UI.message("   Source: GitHub Actions (#{ENV['GITHUB_REF_NAME']})")
     
-    # 🔧 Setup certificates and provisioning profiles with Match + API Key
-    setup_certificates_with_api_key
+    increment_version_number(version_number: version_name)
+    increment_build_number(build_number: version_code)
     
-    # Update version numbers
-    increment_version_number(version_number: version)
-    increment_build_number(build_number: build_number)
+    UI.success("✅ Version applied from GitHub Actions")
+  end
+
+  #สำหรับ Deployment TestFlight Internal
+  lane :deploy_develop do 
+    UI.message("🚀 Deploying to TestFlight Internal...")
+    build_and_deploy(
+      groups: ["Internal Testers", "Developers"],
+      skip_waiting: true
+    )
+  end
+
+  #สำหรับ Deployment TestFlight Beta
+  lane :deploy_preprod do
+    UI.message("🚀 Deploying to TestFlight Beta...")
+    build_and_deploy(
+      groups: ["Beta Testers", "QA Team"],
+      skip_waiting: false
+    )
+  end
+
+  #สำหรับ Deployment App Store
+  lane :deploy_master do
+    UI.message("🎉 Deploying to App Store...")
+    setup_certificates
+    build_release_app
     
+    upload_options = {
+      force: true,
+      submit_for_review: false,
+      automatic_release: false,
+      skip_metadata: true,
+      skip_screenshots: true,
+      precheck_include_in_app_purchases: false
+    }
+    
+    # ✅ ใช้ API key object แทน path
+    api_key_object = create_api_key_object
+    if api_key_object
+      upload_options[:api_key] = api_key_object
+      UI.success("✅ Using API key for App Store upload")
+    else
+      UI.message("⚠️ API key not available for App Store upload, using traditional auth")
+    end
+    
+    upload_to_app_store(upload_options)
+  end
+
+  #สำหรับ Build แต่ไม่ deploy
+  lane :build_only do
+    UI.message("🔨 Building iOS app...")
+    setup_certificates
+    build_release_app
+    UI.success("✅ iOS build completed successfully!")
+  end
+  
+  #จัดการ certificates
+  private_lane :setup_certificates do
+    UI.message("🔐 Setting up certificates...")
+    
+    match_options = {
+      type: "appstore",
+      readonly: true
+    }
+    
+    # เพิ่ม API key ถ้ามี
+    api_key_object = create_api_key_object
+    if api_key_object
+      match_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for Match authentication")
+    else
+      UI.message("⚠️ Using traditional auth for Match (requires FASTLANE_PASSWORD)")
+    end
+    
+    match(match_options)
+    UI.success("✅ Certificates setup completed")
+  end
+
+  #Build app
+  private_lane :build_release_app do
     # Build Flutter iOS (without codesign - Fastlane will handle it)
+    version = ENV['VERSION_NAME'] || "1.0.0"
+    build_number = ENV['VERSION_CODE'] || "1"
+    
     sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
     
     # Build and archive with Xcode
@@ -34,25 +116,41 @@ platform :ios do
       export_method: "app-store",
       output_directory: "build",
       output_name: "Runner.ipa",
-      silent: true
+      clean: true
     )
+  end
+
+  #Core deployment logic
+  private_lane :build_and_deploy do |options|
+    setup_certificates
+    build_release_app
     
-    # Deploy based on target
-    case target
-    when "app_store"
-      deploy_to_app_store
-    when "testflight_beta"
-      deploy_to_testflight_beta
-    when "testflight_internal"
-      deploy_to_testflight_internal
+    upload_options = {
+      skip_waiting_for_build_processing: options[:skip_waiting],
+      groups: options[:groups],
+      distribute_external: false,
+      notify_external_testers: false,
+      changelog: "Automated build from #{ENV['GITHUB_REF_NAME']} branch"
+    }
+    
+    # ✅ ใช้ API key object แทน path
+    api_key_object = create_api_key_object
+    if api_key_object
+      upload_options[:api_key] = api_key_object
+      UI.success("✅ Using App Store Connect API for TestFlight upload")
     else
-      UI.user_error!("❌ Unknown target: #{target}")
+      UI.message("⚠️ API key not available for TestFlight upload, using traditional auth")
     end
+
+    # --- เพิ่มบรรทัดนี้เพื่อความปลอดภัย ---
+    # ล้างค่า api_key_path ที่อาจหลงเหลือมา ป้องกัน conflict ในอนาคต
+    upload_options[:api_key_path] = nil
+    # -------------------------------------
     
-    UI.success("✅ Successfully deployed to #{target}!")
+    upload_to_testflight(upload_options)
   end
   
-  # 🔧 Helper method สำหรับสร้าง App Store Connect API key object
+  #สร้าง App Store Connect API key object
   private_lane :create_api_key_object do
     api_key_id = ENV['APP_STORE_CONNECT_API_KEY_ID']
     api_issuer_id = ENV['APP_STORE_CONNECT_API_ISSUER_ID']
@@ -96,217 +194,11 @@ platform :ios do
       nil
     end
   end
-  
-  # 🔧 NEW: Helper method สำหรับ setup certificates พร้อม API key
-  private_lane :setup_certificates_with_api_key do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true เพื่อหลีกเลี่ยง templateName bug
-    cert_type = options[:type] || "appstore"
-    
-    UI.message("🔐 Setting up certificates...")
-    UI.message("   Type: #{cert_type}")
-    UI.message("   Readonly: #{readonly_mode}")
-    
-    # สร้าง match options
-    match_options = {
-      type: cert_type,
-      readonly: readonly_mode
-    }
-    
-    # เพิ่ม API key ถ้ามี
-    api_key_object = create_api_key_object
-    if api_key_object
-      match_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for Match authentication")
-    else
-      UI.message("⚠️ Using traditional auth for Match (requires FASTLANE_PASSWORD)")
-    end
-    
-    # เรียกใช้ match
-    match(match_options)
-    UI.success("✅ Certificates setup completed!")
-  end
-  
-  # 🔧 Private lanes for different deployment targets with API key support
-  private_lane :deploy_to_app_store do
-    UI.message("🏪 Uploading to App Store...")
-    
-    upload_options = {
-      ipa: "build/Runner.ipa",
-      skip_metadata: true,
-      skip_screenshots: true,
-      submit_for_review: false,
-      automatic_release: false,
-      force: true,
-      precheck_include_in_app_purchases: false
-    }
-    
-    # ✅ ใช้ API key object แทน traditional auth
-    api_key_object = create_api_key_object
-    if api_key_object
-      upload_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for App Store upload")
-    else
-      UI.message("⚠️ Using traditional auth for App Store upload")
-    end
-    
-    upload_to_app_store(upload_options)
-  end
-  
-  private_lane :deploy_to_testflight_beta do
-    UI.message("✈️ Uploading to TestFlight (Beta)...")
-    
-    upload_options = {
-      ipa: "build/Runner.ipa",
-      groups: ["Beta Testers"],
-      distribute_external: true,
-      notify_external_testers: true,
-      changelog: "Beta release - please test and provide feedback",
-      skip_waiting_for_build_processing: false
-    }
-    
-    # ✅ ใช้ API key object
-    api_key_object = create_api_key_object
-    if api_key_object
-      upload_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for TestFlight Beta upload")
-    else
-      UI.message("⚠️ Using traditional auth for TestFlight Beta upload")
-    end
-    
-    upload_to_testflight(upload_options)
-  end
-  
-  private_lane :deploy_to_testflight_internal do
-    UI.message("🔒 Uploading to TestFlight (Internal)...")
-    
-    upload_options = {
-      ipa: "build/Runner.ipa",
-      distribute_external: false,
-      notify_external_testers: false,
-      changelog: "Internal testing build",
-      skip_waiting_for_build_processing: true
-    }
-    
-    # ✅ ใช้ API key object
-    api_key_object = create_api_key_object
-    if api_key_object
-      upload_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for TestFlight Internal upload")
-    else
-      UI.message("⚠️ Using traditional auth for TestFlight Internal upload")
-    end
-    
-    upload_to_testflight(upload_options)
-  end
-  
-  # Helper lanes for specific branches
-  desc "Deploy to App Store (main branch)"
-  lane :deploy_production do
-    deploy(target: "app_store")
-  end
-  
-  desc "Deploy to TestFlight Beta (staging branch)"
-  lane :deploy_staging do
-    deploy(target: "testflight_beta")
-  end
-  
-  desc "Deploy to TestFlight Internal (develop branch)"
-  lane :deploy_development do
-    deploy(target: "testflight_internal")
-  end
-  
-  # Debug/testing lanes
-  desc "Build only (no deploy)"
-  lane :build_only do |options|
-    # version = options[:version] || "1.0.0"
-    # build_number = options[:build_number] || "1"
-    version = "67000.0.0"
-    build_number = "1"
-    
-    UI.message("🔨 Building iOS app...")
-    UI.message("📋 Version: #{version} (#{build_number})")
-    
-    # 🔧 Setup certificates พร้อม API key (ใช้ readonly เพราะมี cert แล้ว)
-    setup_certificates_with_api_key(readonly: true)
-    
-    # Update version
-    increment_version_number(version_number: version)
-    increment_build_number(build_number: build_number)
-    
-    # Build Flutter
-    sh("cd .. && flutter build ios --release --no-codesign --build-name=#{version} --build-number=#{build_number}")
-    
-    # Build with Xcode
-    build_app(
-      workspace: "Runner.xcworkspace",
-      scheme: "Runner",
-      export_method: "app-store",
-      output_directory: "build",
-      output_name: "Runner.ipa"
-    )
-    
-    UI.success("✅ iOS build completed!")
-  end
-  
-  desc "Setup certificates only"
-  lane :setup_certificates do |options|
-    readonly_mode = options[:readonly] || true  # เปลี่ยนกลับเป็น true
-    cert_type = options[:type] || "appstore"
-    
-    # 🔧 ใช้ helper method ใหม่
-    setup_certificates_with_api_key(readonly: readonly_mode, type: cert_type)
-  end
-  
-  # 🔧 Submit for review lane with API key support
-  desc "Submit for App Store review"
-  lane :submit_for_review do
-    UI.message("📋 Submitting for App Store review...")
-    
-    upload_options = {
-      skip_binary_upload: true,
-      submit_for_review: true,
-      automatic_release: false,
-      force: true,
-      submission_information: submission_info
-    }
-    
-    # ✅ ใช้ API key object
-    api_key_object = create_api_key_object
-    if api_key_object
-      upload_options[:api_key] = api_key_object
-      UI.success("✅ Using App Store Connect API for review submission")
-    else
-      UI.message("⚠️ Using traditional auth for review submission")
-    end
-    
-    upload_to_app_store(upload_options)
-    UI.success("✅ App submitted for review!")
-  end
-  
-  # 🔧 Submission information for App Store review
-  private_lane :submission_info do
-    {
-      add_id_info_limits_tracking: true,
-      add_id_info_serves_ads: false,
-      add_id_info_tracks_action: true,
-      add_id_info_tracks_install: true,
-      add_id_info_uses_idfa: true,
-      content_rights_has_rights: true,
-      content_rights_contains_third_party_content: true,
-      export_compliance_platform: 'ios',
-      export_compliance_compliance_required: false,
-      export_compliance_encryption_updated: false,
-      export_compliance_uses_encryption: false,
-      export_compliance_is_exempt: false,
-      export_compliance_contains_third_party_cryptography: false,
-      export_compliance_contains_proprietary_cryptography: false,
-      export_compliance_available_on_french_store: false
-    }
-  end
-  
-  # Error handling
+
+  #Error handling
   error do |lane, exception|
-    UI.error("❌ Error in #{lane}: #{exception.message}")
+    error_message = "❌ iOS deployment failed in lane '#{lane}': #{exception.message}"
+    UI.error(error_message)
     
     # Clean up build artifacts on error
     if File.exist?("build")
@@ -317,5 +209,7 @@ platform :ios do
     if ENV['CI']
       UI.message("📋 Fastlane logs available in artifacts")
     end
+    
+    raise exception
   end
 end

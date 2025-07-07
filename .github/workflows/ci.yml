@@ -1,4 +1,4 @@
-# .github/workflows/ci.yml - Optimized Flutter CI Pipeline
+# .github/workflows/ci.yml - Flutter CI Pipeline with Platform Control
 name: Flutter CI - Pull Request Testing
 
 on:
@@ -8,24 +8,32 @@ on:
       - develop
       - preprod
     paths:
-      - 'lib/**'
-      - 'android/**'
-      - 'ios/**'
-      - 'pubspec.*'
+      - "lib/**"
+      - "android/**"
+      - "ios/**"
+      - "pubspec.*"
+      - "test/**"
+      - ".github/workflows/**"
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: "3.32.2"
+  TEST_ANDROID: "false"
+  TEST_IOS: "false"
 
 jobs:
-
   test-and-validate:
     runs-on: ubuntu-latest
     outputs:
       pr_version: ${{ steps.version.outputs.version }}
+      pr_version_code: ${{ steps.version.outputs.version_code }}
+      target_branch: ${{ steps.branch.outputs.name }}
       has_tests: ${{ steps.changes.outputs.has_tests }}
-      
+      coverage: ${{ steps.coverage.outputs.percentage }}
+      test_android: ${{ steps.platforms.outputs.test_android }}
+      test_ios: ${{ steps.platforms.outputs.test_ios }}
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล 
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -37,15 +45,84 @@ jobs:
         run: |
           BASE_VERSION=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
           PR_VERSION="$BASE_VERSION-pr.${{ github.event.number }}"
+          PR_VERSION_CODE=99
           echo "version=$PR_VERSION" >> $GITHUB_OUTPUT
-          echo "📋 PR Version: $PR_VERSION"
+          echo "version_code=$PR_VERSION_CODE" >> $GITHUB_OUTPUT
+          echo "📋 PR Version: $PR_VERSION (code: $PR_VERSION_CODE)"
+
+      #เก็บข้อมูลว่า PR นี้จะ merge เข้า branch ไหน
+      - name: Set Target Branch
+        id: branch
+        run: |
+          TARGET_BRANCH=${{ github.base_ref }}
+          echo "name=$TARGET_BRANCH" >> $GITHUB_OUTPUT
+          echo "Target branch: $TARGET_BRANCH"
+
+      #ตรวจสอบว่ามี tests อยู่หรือไม่
+      - name: Check for Tests
+        id: changes
+        run: |
+          HAS_TESTS="false"
+          if [ -d "test" ] && [ "$(find test -name "*.dart" | wc -l)" -gt 0 ]; then
+            HAS_TESTS="true"
+          fi
+          echo "has_tests=$HAS_TESTS" >> $GITHUB_OUTPUT
+          echo "Has tests: $HAS_TESTS"
+
+      #ตรวจจับการ build platform ที่ต้องการทดสอบ
+      - name: Detect Required Platforms
+        id: platforms
+        run: |
+          # เริ่มต้นด้วยค่า default
+          TEST_ANDROID="${{ env.TEST_ANDROID }}"
+          TEST_IOS="${{ env.TEST_IOS }}"
+
+          echo "🔍 Initial platform settings:"
+          echo "  TEST_ANDROID: $TEST_ANDROID"
+          echo "  TEST_IOS: $TEST_IOS"
+
+          # 🎯 Manual Control Only - ตรวจสอบจาก labels และ PR title
+
+          # Check PR labels
+          if echo "${{ github.event.pull_request.labels.*.name }}" | grep -i "test-android" > /dev/null; then
+            echo "🏷️ 'test-android' label detected - enabling Android testing"
+            TEST_ANDROID="true"
+          fi
+
+          if echo "${{ github.event.pull_request.labels.*.name }}" | grep -i "test-ios" > /dev/null; then
+            echo "🏷️ 'test-ios' label detected - enabling iOS testing"
+            TEST_IOS="true"
+          fi
+
+          # Check PR title
+          if echo "${{ github.event.pull_request.title }}" | grep -E "\[Android\]|\[android\]" > /dev/null; then
+            echo "📝 '[Android]' in PR title - enabling Android testing"
+            TEST_ANDROID="true"
+          fi
+
+          if echo "${{ github.event.pull_request.title }}" | grep -E "\[iOS\]|\[ios\]" > /dev/null; then
+            echo "📝 '[iOS]' in PR title - enabling iOS testing"
+            TEST_IOS="true"
+          fi
+
+          # Output final decisions
+          echo "test_android=$TEST_ANDROID" >> $GITHUB_OUTPUT
+          echo "test_ios=$TEST_IOS" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "🎯 Final platform testing decisions:"
+          echo "  Android: $TEST_ANDROID"
+          echo "  iOS: $TEST_IOS"
+          echo "  PR title: ${{ github.event.pull_request.title }}"
+          echo "  PR labels: ${{ github.event.pull_request.labels.*.name }}"
+          echo "  Mode: Manual Control Only"
 
       #ติดตั้ง Flutter SDK ใน GitHub runner
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
+          channel: "stable"
           cache: true
 
       #เก็บ dependencies ที่ดาวน์โหลดแล้วไว้ใช้ซ้ำ
@@ -66,12 +143,50 @@ jobs:
           echo "📦 Installing dependencies..."
           flutter pub get
 
+      ##################################################
+      #เซตนี้เป็น Quality Gates เพื่อตรวจสอบคุณภาพโค้ดก่อน merge
+
+      #ตรวจสอบคุณภาพโค้ด
+      - name: Code Analysis
+        run: |
+          echo "� Running code analysis..."
+          echo "## � Code Analysis" >> $GITHUB_STEP_SUMMARY
+
+          if flutter analyze --no-congratulate > analysis-results.txt 2>&1; then
+            echo "✅ Code analysis passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Analysis issues found:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -30 analysis-results.txt >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat analysis-results.txt
+            exit 1
+          fi
+
+      #ตรวจสอบการจัดรูปแบบโค้ด ให้เป็นมาตรฐานเดียวกัน
+      - name: Code Formatting Check
+        run: |
+          echo "� Checking code formatting..."
+          echo "## � Code Formatting" >> $GITHUB_STEP_SUMMARY
+
+          if dart format --set-exit-if-changed . > format-results.txt 2>&1; then
+            echo "✅ All files properly formatted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Formatting issues found:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -20 format-results.txt >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "💡 Run 'dart format .' to fix formatting" >> $GITHUB_STEP_SUMMARY
+            cat format-results.txt
+            exit 1
+          fi
+
       #Security Audit เอาไว้ ตรวจสอบช่องโหว่ความปลอดภัย
       - name: Dependency Security Audit
         run: |
-          echo "🔒 Running dependency security audit..."
-          echo "## 🔒 Security Audit" >> $GITHUB_STEP_SUMMARY
-          
+          echo "� Running dependency security audit..."
+          echo "## � Security Audit" >> $GITHUB_STEP_SUMMARY
+
           # Check for pub audit command (if available)
           if flutter pub audit --help > /dev/null 2>&1; then
             echo "Running flutter pub audit..."
@@ -90,50 +205,17 @@ jobs:
             echo "✅ Manual security review completed" >> $GITHUB_STEP_SUMMARY
             echo "💡 Consider upgrading to newer Flutter version for pub audit support" >> $GITHUB_STEP_SUMMARY
           fi
-
-      #ตรวจสอบคุณภาพโค้ด
-      - name: Code Analysis
-        run: |
-          echo "🔍 Running code analysis..."
-          echo "## 🔍 Code Analysis" >> $GITHUB_STEP_SUMMARY
-          
-          if flutter analyze --no-congratulate > analysis-results.txt 2>&1; then
-            echo "✅ Code analysis passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Analysis issues found:" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -30 analysis-results.txt >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat analysis-results.txt
-            exit 1
-          fi
-
-      #ตรวจสอบการจัดรูปแบบโค้ด ให้เป็นมาตรฐานเดียวกัน
-      - name: Code Formatting Check
-        run: |
-          echo "📝 Checking code formatting..."
-          echo "## 📝 Code Formatting" >> $GITHUB_STEP_SUMMARY
-          
-          if dart format --set-exit-if-changed . > format-results.txt 2>&1; then
-            echo "✅ All files properly formatted" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ Formatting issues found:" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -20 format-results.txt >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "💡 Run 'dart format .' to fix formatting" >> $GITHUB_STEP_SUMMARY
-            cat format-results.txt
-            exit 1
-          fi
-
       ##################################################
+      ##################################################
+      #เซตนี้เป็น Testing Pipeline เพื่อตรวจสอบว่าโค้ดทำงานถูกต้องและครอบคลุมเพียงใด
+
       #การแสดงผล + วิเคราะห์ coverage
-      - name: Coverage Report
-        if: needs.test-and-validate.outputs.has_tests == 'true'
+      - name: Run Tests with Coverage
+        if: steps.changes.outputs.has_tests == 'true'
         run: |
           echo "🧪 Running tests with coverage..."
           echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
-          
+
           if flutter test --coverage --reporter=expanded > test-results.txt 2>&1; then
             # Count tests
             TEST_COUNT=$(grep -o "All [0-9]* tests passed" test-results.txt | grep -o "[0-9]*" || echo "unknown")
@@ -149,23 +231,23 @@ jobs:
 
       - name: Calculate Coverage
         id: coverage
-        if: needs.test-and-validate.outputs.has_tests == 'true'
+        if: steps.changes.outputs.has_tests == 'true'
         run: |
           COVERAGE="0"
-          
+
           if [ -f "coverage/lcov.info" ]; then
             # Install lcov for coverage calculation
             sudo apt-get update && sudo apt-get install -y lcov >/dev/null 2>&1
             COVERAGE=$(lcov --summary coverage/lcov.info 2>/dev/null | \
                       grep 'lines' | grep -o '[0-9.]*%' | head -1 | sed 's/%//' || echo "0")
           fi
-          
+
           echo "percentage=${COVERAGE:-0}" >> $GITHUB_OUTPUT
-          
+
           # Coverage report
           echo "## 📊 Test Coverage" >> $GITHUB_STEP_SUMMARY
           echo "- **Coverage:** ${COVERAGE:-0}%" >> $GITHUB_STEP_SUMMARY
-          
+
           if [ "$(awk "BEGIN {print (${COVERAGE:-0} >= 80) ? 1 : 0}")" = "1" ]; then
             echo "- **Status:** ✅ Excellent (≥80%)" >> $GITHUB_STEP_SUMMARY
           elif [ "$(awk "BEGIN {print (${COVERAGE:-0} >= 70) ? 1 : 0}")" = "1" ]; then
@@ -177,14 +259,14 @@ jobs:
           fi
 
       - name: No Tests Warning
-        if: needs.test-and-validate.outputs.has_tests == 'false'
+        if: steps.changes.outputs.has_tests == 'false'
         run: |
           echo "## 🧪 Test Status" >> $GITHUB_STEP_SUMMARY
           echo "⚠️ No unit tests found" >> $GITHUB_STEP_SUMMARY
           echo "💡 Consider adding unit tests for better code quality" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload Coverage
-        if: needs.test-and-validate.outputs.has_tests == 'true'
+      - name: Upload Coverage Reports
+        if: steps.changes.outputs.has_tests == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-pr-${{ github.event.number }}
@@ -192,22 +274,21 @@ jobs:
             coverage/
             test-results.txt
           retention-days: 7
-        ##################################################
-      ##################################################
       ##################################################
 
-  # Build testing for Android
+  # รันเฉพาะเมื่อ platform detection กำหนดให้ test Android
   build-android-test:
     needs: [test-and-validate]
+    if: needs.test-and-validate.outputs.test_android == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล   
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
 
-      #ติดตั้ง Flutter SDK ใน GitHub runner  
+      #ติดตั้ง Flutter SDK ใน GitHub runner
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -218,8 +299,8 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: "temurin"
+          java-version: "17"
 
       #ติดตั้ง packages ที่ต้องใช้ในโปรเจกต์
       - name: Get Dependencies
@@ -231,8 +312,8 @@ jobs:
           echo "🤖 Building Android debug APK..."
           flutter build apk --debug \
             --build-name="${{ needs.test-and-validate.outputs.pr_version }}" \
-            --build-number=99
-          
+            --build-number=${{ needs.test-and-validate.outputs.pr_version_code }}
+
           if [ -f "build/app/outputs/flutter-apk/app-debug.apk" ]; then
             size=$(ls -lh build/app/outputs/flutter-apk/app-debug.apk | awk '{print $5}')
             echo "✅ Debug APK: $size"
@@ -242,18 +323,19 @@ jobs:
             exit 1
           fi
 
-  # Build testing for iOS
+  # รันเฉพาะเมื่อ platform detection กำหนดให้ test iOS
   build-ios-test:
     needs: [test-and-validate]
+    if: needs.test-and-validate.outputs.test_ios == 'true'
     runs-on: macos-latest
     timeout-minutes: 20
-    
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล   
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
 
-      #ติดตั้ง Flutter SDK ใน GitHub runner  
+      #ติดตั้ง Flutter SDK ใน GitHub runner
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -276,8 +358,8 @@ jobs:
           echo "🍎 Building iOS debug..."
           flutter build ios --debug --no-codesign \
             --build-name="${{ needs.test-and-validate.outputs.pr_version }}" \
-            --build-number=99
-          
+            --build-number=${{ needs.test-and-validate.outputs.pr_version_code }}
+
           if [ -d "build/ios/iphoneos/Runner.app" ]; then
             size=$(du -sh build/ios/iphoneos/Runner.app | cut -f1)
             echo "✅ Debug iOS App: $size"
@@ -287,12 +369,12 @@ jobs:
             exit 1
           fi
 
-  #สรุปการ build test
+  #สรุปการ build test - Smart summary based on tested platforms
   pr-summary:
     needs: [test-and-validate, build-android-test, build-ios-test]
     if: always()
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Generate PR Summary
         run: |
@@ -304,9 +386,9 @@ jobs:
           echo "- **Base:** ${{ github.event.pull_request.base.ref }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Head:** ${{ github.event.pull_request.head.ref }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           echo "### ✅ Validation Results" >> $GITHUB_STEP_SUMMARY
-          
+
           # Code Quality
           QUALITY_STATUS="${{ needs.test-and-validate.result }}"
           if [ "$QUALITY_STATUS" = "success" ]; then
@@ -314,7 +396,7 @@ jobs:
           else
             echo "- **Code Quality:** ❌ Failed" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           # Test Coverage
           if [ "${{ needs.test-and-validate.outputs.has_tests }}" = "true" ]; then
             COVERAGE="${{ needs.test-and-validate.outputs.coverage }}"
@@ -322,30 +404,64 @@ jobs:
           else
             echo "- **Test Coverage:** ⚠️ No tests" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
+          # Platform testing summary
+          ANDROID_TESTED="${{ needs.test-and-validate.outputs.test_android }}"
+          IOS_TESTED="${{ needs.test-and-validate.outputs.test_ios }}"
+
+          echo "- **Platform Testing:**" >> $GITHUB_STEP_SUMMARY
+          if [ "$ANDROID_TESTED" = "true" ] && [ "$IOS_TESTED" = "true" ]; then
+            echo "  - 🎯 Full testing: Both Android & iOS" >> $GITHUB_STEP_SUMMARY
+          elif [ "$ANDROID_TESTED" = "true" ] && [ "$IOS_TESTED" = "false" ]; then
+            echo "  - 🤖 Android only (iOS will test in CD)" >> $GITHUB_STEP_SUMMARY
+          elif [ "$ANDROID_TESTED" = "false" ] && [ "$IOS_TESTED" = "true" ]; then
+            echo "  - 📱 iOS only (Android will test in CD)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "  - ⚠️ No platform builds (check configuration)" >> $GITHUB_STEP_SUMMARY
+          fi
+
           # Android Build
           ANDROID_STATUS="${{ needs.build-android-test.result }}"
-          echo "- **Android Build:** $( [ "$ANDROID_STATUS" = "success" ] && echo "✅ Passed" || echo "❌ Failed" )" >> $GITHUB_STEP_SUMMARY
-          
+          if [ "$ANDROID_TESTED" = "true" ]; then
+            echo "- **Android Build:** $( [ "$ANDROID_STATUS" = "success" ] && echo "✅ Passed" || echo "❌ Failed" )" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Android Build:** ⏭️ Skipped (manual control)" >> $GITHUB_STEP_SUMMARY
+          fi
+
           # iOS Build  
           IOS_STATUS="${{ needs.build-ios-test.result }}"
-          echo "- **iOS Build:** $( [ "$IOS_STATUS" = "success" ] && echo "✅ Passed" || echo "❌ Failed" )" >> $GITHUB_STEP_SUMMARY
-          
+          if [ "$IOS_TESTED" = "true" ]; then
+            echo "- **iOS Build:** $( [ "$IOS_STATUS" = "success" ] && echo "✅ Passed" || echo "❌ Failed" )" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **iOS Build:** ⏭️ Skipped (manual control)" >> $GITHUB_STEP_SUMMARY
+          fi
+
           echo "" >> $GITHUB_STEP_SUMMARY
-          
+
           # Final Status
           QUALITY_OK="${{ needs.test-and-validate.result == 'success' }}"
           ANDROID_OK="${{ needs.build-android-test.result == 'success' || needs.build-android-test.result == 'skipped' }}"
           IOS_OK="${{ needs.build-ios-test.result == 'success' || needs.build-ios-test.result == 'skipped' }}"
-          
+
           if [ "$QUALITY_OK" = "true" ] && [ "$ANDROID_OK" = "true" ] && [ "$IOS_OK" = "true" ]; then
             echo "### ✅ Ready for Review" >> $GITHUB_STEP_SUMMARY
             echo "All validation checks passed! This PR is ready for review." >> $GITHUB_STEP_SUMMARY
+            
+            # Show what will happen after merge
+            if [ "$ANDROID_TESTED" = "false" ] || [ "$IOS_TESTED" = "false" ]; then
+              echo "Untested platforms will build automatically in CD pipeline." >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "### ❌ Issues Found" >> $GITHUB_STEP_SUMMARY
             echo "Some validation checks failed. Please fix the issues before requesting review." >> $GITHUB_STEP_SUMMARY
           fi
-          
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 💡 Platform Control Tips" >> $GITHUB_STEP_SUMMARY
+          echo "- Use \`[iOS]\` in PR title to force iOS testing" >> $GITHUB_STEP_SUMMARY
+          echo "- Use \`[Android]\` in PR title to force Android testing" >> $GITHUB_STEP_SUMMARY  
+          echo "- Add labels: \`test-ios\` or \`test-android\` for manual control" >> $GITHUB_STEP_SUMMARY
+          echo "- Manual control only - no auto-detection" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*Validation completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 
@@ -354,7 +470,7 @@ jobs:
           QUALITY_OK="${{ needs.test-and-validate.result == 'success' }}"
           ANDROID_OK="${{ needs.build-android-test.result == 'success' || needs.build-android-test.result == 'skipped' }}"
           IOS_OK="${{ needs.build-ios-test.result == 'success' || needs.build-ios-test.result == 'skipped' }}"
-          
+
           if [ "$QUALITY_OK" = "true" ] && [ "$ANDROID_OK" = "true" ] && [ "$IOS_OK" = "true" ]; then
             echo "✅ All PR validation checks passed!"
             exit 0
@@ -362,3 +478,39 @@ jobs:
             echo "❌ PR validation failed"
             exit 1
           fi
+
+# 📋 USAGE EXAMPLES:
+#
+# 1. Default (fastest, recommended):
+#    - ไม่ต้องเพิ่ม labels หรือ keywords ใด ๆ
+#    - รันแค่ tests เท่านั้น (~1-2 นาที)
+#    - ไม่ build platform ใด ๆ (ประหยัดเวลาสูงสุด)
+#
+# 2. Android-only testing:
+#    - เพิ่ม [Android] หรือ [android] ใน PR title
+#    - หรือเพิ่ม label 'test-android' ให้ PR
+#    - หรือแก้ไข TEST_ANDROID: 'true' ในไฟล์นี้
+#    - จะรัน Android build (~3-5 นาที)
+#
+# 3. iOS-only testing:
+#    - เพิ่ม [iOS] หรือ [ios] ใน PR title
+#    - หรือเพิ่ม label 'test-ios' ให้ PR
+#    - หรือแก้ไข TEST_IOS: 'true' ในไฟล์นี้
+#    - จะรัน iOS build (~8-10 นาที)
+#
+# 4. Full testing (both platforms):
+#    - เพิ่ม labels ทั้งสอง: 'test-ios' และ 'test-android'
+#    - หรือเพิ่ม [Android] [iOS] ใน title
+#    - หรือแก้ไข TEST_ANDROID: 'true', TEST_IOS: 'true'
+#    - จะรันทั้งสอง builds (~12-15 นาที)
+#
+# 🏷️ วิธีเพิ่ม Label ใน GitHub:
+# 1. ไปที่ PR ของคุณ
+# 2. คลิค "Labels" ทางด้านขวา
+# 3. เลือก 'test-android' หรือ 'test-ios'
+# 4. หรือสร้าง label ใหม่ถ้าไม่มี
+#
+# 📝 วิธีใช้ PR Title:
+# - ตัวอย่าง: "Fix login bug [Android]"
+# - ตัวอย่าง: "Update iOS UI [iOS]"
+# - ตัวอย่าง: "Major refactor [Android] [iOS]"

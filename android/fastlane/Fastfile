@@ -1,25 +1,85 @@
-# android/fastlane/Fastfile - Static Android Fastlane Configuration
+# android/fastlane/Fastfile - Standardized for all platforms
 default_platform(:android)
 
 platform :android do
+  
+  #Setup และ Configuration
   before_all do
     ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
     setup_ci if ENV['CI']
+    apply_version_from_env if ENV['CI']
   end
 
-  desc "Deploy to Google Play Store"
-  lane :deploy do |options|
-    track = options[:track] || "internal"
+  #Version Management
+  private_lane :apply_version_from_env do
+    version_name = ENV['VERSION_NAME'] || "1.0.0"
+    version_code = ENV['VERSION_CODE'] || "1"
     
-    UI.message("🚀 Deploying Android to Google Play")
-    UI.message("📍 Track: #{track}")
-    UI.message("📦 Current directory: #{Dir.pwd}")
+    UI.message("📋 Applying version from GitHub Actions workflow:")
+    UI.message("   versionName: #{version_name}")
+    UI.message("   versionCode: #{version_code}")
+    UI.message("   Source: GitHub Actions (#{ENV['GITHUB_REF_NAME']})")
     
-    # 🔍 Look for AAB file in multiple locations
+    # For Flutter, version is handled by flutter build command
+    # No need to modify gradle files directly
+    UI.success("✅ Version will be applied during Flutter build:")
+    UI.success("   --build-name=#{version_name}")
+    UI.success("   --build-number=#{version_code}")
+  end
+
+  #สำหรับ Deployment Internal Testing
+  lane :deploy_develop do
+    UI.message("🚀 Deploying to Internal Testing...")
+    build_and_deploy(
+      track: 'internal',
+      release_status: 'draft'
+    )
+  end
+
+  #สำหรับ Deployment Alpha Testing
+  lane :deploy_preprod do
+    UI.message("🚀 Deploying to Alpha Testing...")
+    build_and_deploy(
+      track: 'alpha',
+      release_status: 'draft'
+    )
+  end
+
+  #สำหรับ Deployment Production
+  lane :deploy_master do
+    UI.message("🎉 Deploying to Production...")
+    build_and_deploy(
+      track: 'production',
+      release_status: 'draft',
+      # rollout: '0.1'  # 10% rollout for safety
+    )
+  end
+
+  #สำหรับ Build แต่ไม่ deploy
+  lane :build_only do
+    UI.message("� Building release bundle...")
+    gradle(
+      task: "clean bundleRelease",
+      print_command: false
+    )
+    UI.success("✅ Build completed successfully!")
+  end
+
+  #Core deployment logic
+  private_lane :build_and_deploy do |options|
+    version_name = ENV['VERSION_NAME'] || "1.0.0"
+    version_code = ENV['VERSION_CODE'] || "1"
+    
+    UI.message("🔨 Building Flutter Android Bundle...")
+    
+    # Build Flutter Android Bundle
+    sh("cd ../.. && flutter build appbundle --release --build-name=#{version_name} --build-number=#{version_code}")
+    
+    # 🔍 Look for AAB file in Flutter build output
     possible_paths = [
-      "../build/app/outputs/bundle/release/app-release.aab",
       "../../build/app/outputs/bundle/release/app-release.aab",
-      "../app/build/outputs/bundle/release/app-release.aab"
+      "../build/app/outputs/bundle/release/app-release.aab",
+      "build/app/outputs/bundle/release/app-release.aab"
     ]
     
     aab_path = nil
@@ -39,50 +99,32 @@ platform :android do
     aab_size = File.size(aab_path) / 1024.0 / 1024.0
     UI.message("📏 AAB size: #{aab_size.round(2)} MB")
     
-    # Upload to Google Play Store
+    # Upload to Play Store
     upload_to_play_store(
-      track: track,
-      aab: aab_path,
+      track: options[:track],
       json_key: "google-play-key.json",
+      aab: aab_path,
+      release_status: options[:release_status],
+      rollout: options[:rollout],
       skip_upload_metadata: true,
       skip_upload_images: true,
       skip_upload_screenshots: true,
-      release_status: track == "production" ? "completed" : "draft"
+      timeout: 300
     )
     
-    UI.success("✅ Successfully deployed to #{track} track!")
+    UI.success("✅ Successfully uploaded to #{options[:track]} track!")
   end
-  
-  # Helper lanes for specific branches
-  desc "Deploy to production (main branch)"
-  lane :deploy_production do
-    deploy(track: "production")
-  end
-  
-  desc "Deploy to beta (staging branch)"
-  lane :deploy_beta do
-    deploy(track: "beta")
-  end
-  
-  desc "Deploy to internal (develop branch)"
-  lane :deploy_internal do
-    deploy(track: "internal")
-  end
-  
-  # Debug/testing lane
-  desc "Build only (no deploy)"
-  lane :build_only do
-    gradle(task: "clean assembleRelease")
-    UI.success("✅ Android build completed!")
-  end
-  
-  # Error handling
+
+  #Error handling
   error do |lane, exception|
-    UI.error("❌ Error in #{lane}: #{exception.message}")
+    error_message = "❌ Android deployment failed in lane '#{lane}': #{exception.message}"
+    UI.error(error_message)
     
     # Upload logs for debugging
     if ENV['CI']
       UI.message("📋 Fastlane logs available in artifacts")
     end
+    
+    raise exception
   end
 end
