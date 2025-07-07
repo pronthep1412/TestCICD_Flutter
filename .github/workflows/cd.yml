@@ -28,6 +28,11 @@ on:
         description: "Force specific version (optional)"
         required: false
 
+permissions:
+  contents: write
+  pull-requests: read
+  actions: read
+
 env:
   FLUTTER_VERSION: "3.32.2"
 
@@ -214,7 +219,7 @@ jobs:
       environment: ${{ needs.setup.outputs.environment }}
     secrets: inherit
 
-  #สร้าง GitHub Release
+  #สร้าง GitHub Release สำหรับ production
   create-release:
     needs: [setup, deploy-android, deploy-ios]
     if: |
@@ -228,6 +233,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and Push Release Tag
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          TAG_NAME="v${{ needs.setup.outputs.version }}"
+
+          # Check if tag already exists
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ Tag $TAG_NAME already exists, skipping..."
+          else
+            git tag -a "$TAG_NAME" -m "Production release $TAG_NAME"
+            git push origin "$TAG_NAME"
+            echo "✅ Created and pushed tag: $TAG_NAME"
+          fi
 
       - name: Generate Release Notes
         id: release_notes
@@ -235,20 +258,26 @@ jobs:
           VERSION="${{ needs.setup.outputs.version }}"
 
           # Generate changelog from commits
-          echo "## 🚀 Release v$VERSION" > release_notes.md
+          echo "## 🚀 Flutter Production Release v$VERSION" > release_notes.md
           echo "" >> release_notes.md
-          echo "### 📱 Platform Availability" >> release_notes.md
+          echo "### � Release Information" >> release_notes.md
+          echo "- **Version:** v$VERSION" >> release_notes.md
+          echo "- **Version Code:** ${{ needs.setup.outputs.version_code }}" >> release_notes.md
+          echo "- **Branch:** ${{ needs.setup.outputs.branch }}" >> release_notes.md
+          echo "- **Deployed by:** ${{ github.actor }}" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### �📱 Platform Availability" >> release_notes.md
 
           if [ "${{ needs.deploy-android.result }}" = "success" ]; then
             echo "- **Android**: ✅ Google Play Store" >> release_notes.md
           fi
 
           if [ "${{ needs.deploy-ios.result }}" = "success" ]; then
-            echo "- **iOS**: ✅ App Store" >> release_notes.md
+            echo "- **iOS**: ✅ App Store Connect (TestFlight)" >> release_notes.md
           fi
 
           echo "" >> release_notes.md
-          echo "### 📝 Changes" >> release_notes.md
+          echo "### 📝 Recent Changes" >> release_notes.md
 
           # Get recent commits
           git log --oneline --no-merges -10 --pretty="- %s" >> release_notes.md
@@ -257,12 +286,12 @@ jobs:
           echo "*Released on $(date)*" >> release_notes.md
 
       - name: Create GitHub Release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ needs.setup.outputs.version }}
-          release_name: "Flutter v${{ needs.setup.outputs.version }}"
+          name: "Flutter Production Release v${{ needs.setup.outputs.version }}"
           body_path: release_notes.md
           draft: false
           prerelease: false

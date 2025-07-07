@@ -16,7 +16,7 @@ on:
       environment:
         required: false
         type: string
-        default: 'development'
+        default: "development"
     secrets:
       APP_STORE_CONNECT_API_KEY_ID:
         required: true
@@ -30,36 +30,36 @@ on:
         required: true
       MATCH_PRIVATE_KEY:
         required: true
-  
+
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g., 1.2.3)'
+        description: "Version (e.g., 1.2.3)"
         required: true
-        default: '1.0.0'
+        default: "1.0.0"
       version_code:
-        description: 'Version code (e.g., 123)'
+        description: "Version code (e.g., 123)"
         required: true
-        default: '1'
+        default: "1"
       branch:
-        description: 'Branch name'
+        description: "Branch name"
         required: true
-        default: 'develop'
+        default: "develop"
       environment:
-        description: 'Environment'
+        description: "Environment"
         required: false
-        default: 'development'
+        default: "development"
 
 env:
-  FLUTTER_VERSION: '3.32.2'
+  FLUTTER_VERSION: "3.32.2"
 
 jobs:
   build-and-deploy-ios:
     runs-on: macos-15
     environment: ${{ inputs.environment }}
-    
+
     steps:
-      #ดึงโค้ดใน git มาประมวลผล 
+      #ดึงโค้ดใน git มาประมวลผล
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -68,7 +68,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: 'stable'
+          channel: "stable"
           cache: true
 
       #เก็บ dependencies ที่ดาวน์โหลดแล้วไว้ใช้ซ้ำ
@@ -110,20 +110,20 @@ jobs:
       - name: Verify App Store Connect API Configuration
         run: |
           echo "🔑 Verifying App Store Connect API configuration..."
-          
+
           # Check if all required API variables are available
           if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}" ]; then
             echo "✅ API Key ID: Available"
           else
             echo "❌ API Key ID: Missing"
           fi
-          
+
           if [ -n "${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}" ]; then
             echo "✅ Issuer ID: Available"
           else
             echo "❌ Issuer ID: Missing"
           fi
-          
+
           if [ -n "${{ secrets.APP_STORE_CONNECT_API_KEY }}" ]; then
             # Check if it's valid base64
             if echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" | base64 -d > /dev/null 2>&1; then
@@ -142,7 +142,7 @@ jobs:
         run: |
           echo "📱 Installing CocoaPods dependencies..."
           cd ios
-          
+
           # Check if cache hit
           if [ -d "Pods" ] && [ -f "Podfile.lock" ]; then
             echo "✅ Pods cache found, verifying integrity..."
@@ -155,14 +155,14 @@ jobs:
             echo "🔄 Installing fresh Pods..."
             pod install
           fi
-          
+
           echo "✅ CocoaPods installation completed"
 
       #เตรียม Ruby environment เพื่อใช้งาน Fastlane
       - name: Setup Ruby for Fastlane
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.2'
+          ruby-version: "3.2"
           bundler-cache: true
           working-directory: ios
 
@@ -179,14 +179,14 @@ jobs:
           VERSION_CODE: ${{ inputs.version_code }}
         run: |
           echo "🍎 Building and deploying iOS..."
-          
+
           # Show version information for debugging
           echo "📋 Version Information:"
           echo "- VERSION_NAME: $VERSION_NAME"
           echo "- VERSION_CODE: $VERSION_CODE"
           echo "- Input Version: ${{ inputs.version }}"
           echo "- Input Version Code: ${{ inputs.version_code }}"
-          
+
           # Determine deployment target and lane based on branch
           case "${{ inputs.branch }}" in
             "master") 
@@ -205,7 +205,7 @@ jobs:
               echo "🔒 Target: TestFlight Internal"
               ;;
           esac
-          
+
           # Pre-build validation
           echo "📋 Build configuration:"
           echo "- Target: $TARGET"
@@ -215,20 +215,20 @@ jobs:
           echo "- Branch: ${{ inputs.branch }}"
           echo "- API Key ID: ${APP_STORE_CONNECT_API_KEY_ID:0:8}..."
           echo "- API Key Content: $([ -n "$APP_STORE_CONNECT_API_KEY_CONTENT" ] && echo "Available" || echo "Missing")"
-          
+
           # Deploy with Fastlane using standardized lane names
           cd ios
-          
+
           echo "🚀 Starting deployment..."
           bundle exec fastlane $LANE
-          
+
           echo "✅ iOS deployment completed!"
 
       #ตรวจสอบว่า build สำเร็จจริงๆ และมีไฟล์ที่ต้องการ
       - name: Verify Build Artifacts
         run: |
           echo "🔍 Verifying build artifacts..."
-          
+
           # Check for IPA file
           if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
             echo "✅ IPA found: $ipa_file"
@@ -237,19 +237,19 @@ jobs:
           else
             echo "⚠️ No IPA file found (may be normal for direct upload)"
           fi
-          
+
           # Check Fastlane logs
           if [ -d "ios/fastlane/logs" ]; then
             echo "📋 Fastlane logs available"
             ls -la ios/fastlane/logs/
           fi
-          
+
           # Check build directory
           if [ -d "ios/build" ]; then
             echo "📦 Build directory contents:"
             ls -la ios/build/
           fi
-      
+
       #เก็บไฟล์ build results ไว้ใน GitHub สำหรับ download หรือ debug
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -261,7 +261,7 @@ jobs:
             ios/*.ipa
           retention-days: 30
 
-      #สรุปผลการ build 
+      #สรุปผลการ build
       - name: Build Summary
         run: |
           echo "## 🍎 iOS Build Summary" >> $GITHUB_STEP_SUMMARY
@@ -271,27 +271,27 @@ jobs:
           echo "- **Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Runner:** ${{ runner.os }} ($(sw_vers -productVersion))" >> $GITHUB_STEP_SUMMARY
           echo "- **Flutter:** ${{ env.FLUTTER_VERSION }}" >> $GITHUB_STEP_SUMMARY
-          
+
           # Show deployment target
           case "${{ inputs.branch }}" in
             "master") echo "- **Target:** 🏪 App Store" >> $GITHUB_STEP_SUMMARY ;;
             "preprod") echo "- **Target:** ✈️ TestFlight Beta" >> $GITHUB_STEP_SUMMARY ;;
             *) echo "- **Target:** 🔒 TestFlight Internal" >> $GITHUB_STEP_SUMMARY ;;
           esac
-          
+
           # Check for IPA and show size
           if find ios -name "*.ipa" -type f | head -1 | read ipa_file; then
             size=$(ls -lh "$ipa_file" | awk '{print $5}')
             echo "- **IPA Size:** $size" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           # Performance metrics
           if [ -f "ios/fastlane/logs/"*.log ]; then
             echo "- **Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
           else
             echo "- **Build Status:** ⚠️ Check logs" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "*Build completed on $(date)*" >> $GITHUB_STEP_SUMMARY
 
@@ -302,9 +302,9 @@ jobs:
           echo "🧹 Cleaning up sensitive files..."
           # ✅ ไม่ต้อง cleanup API key file แล้วเพราะไม่ได้สร้าง
           # SSH keys are cleaned up automatically by ssh-agent action
-          
+
           # Clean up any temporary build files
           rm -rf ios/build/temp 2>/dev/null || true
           rm -rf ios/fastlane/tmp 2>/dev/null || true
-          
+
           echo "✅ Cleanup completed"
